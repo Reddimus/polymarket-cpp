@@ -39,3 +39,40 @@
 
 # debug information files
 *.dwo
+
+# Backup files
+*.bak
+*.backup
+*.orig
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Build artifacts
+build/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+Makefile.cmake
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Third-party downloaded artifacts
+third_party/*.tgz
+third_party/*.tar.gz
+third_party/package/
+
+# Temporary folder
+tmp/
+
+# Prompts (keep plan file, ignore others)
+.github/prompts/*
