@@ -70,15 +70,16 @@ define run_example
 	fi
 endef
 
-# Run examples
+# Run examples — keep this list aligned with examples/CMakeLists.txt.
+# The websocket example is intentionally absent: src/clob/websocket.cpp
+# is a Phase-10 stub (see CHANGELOG "Stubs (TODO: implement)"), so a
+# WebSocket example would have nothing to demonstrate. Reinstate
+# run-websocket once the WS implementation lands.
 run-market_data: build
 	$(call run_example,./$(BUILD_DIR)/examples/example_market_data)
 
 run-order_placement: build
 	$(call run_example,./$(BUILD_DIR)/examples/example_order_placement)
-
-run-websocket: build
-	$(call run_example,./$(BUILD_DIR)/examples/example_websocket)
 
 # Help
 help:
@@ -97,4 +98,3 @@ help:
 	@echo "Examples:"
 	@echo "  make run-market_data      - Run market data example"
 	@echo "  make run-order_placement  - Run order placement example"
-	@echo "  make run-websocket        - Run WebSocket example"
