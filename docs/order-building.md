@@ -139,6 +139,7 @@ builder.post_only(true);
 ```
 
 This is useful for:
+
 - Ensuring you receive maker rebates
 - Avoiding unexpected fills
 
