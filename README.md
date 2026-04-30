@@ -2,8 +2,9 @@
 
 A production-grade C++ SDK for [Polymarket](https://polymarket.com) prediction market APIs.
 
-[![Build](https://github.com/yourorg/polymarket-cpp/actions/workflows/build.yml/badge.svg)](https://github.com/yourorg/polymarket-cpp/actions)
-[![C++23](https://img.shields.io/badge/C%2B%2B-23-blue.svg)](https://en.cppreference.com/w/cpp/23)
+[![CI](https://github.com/Reddimus/polymarket-cpp/actions/workflows/ci.yml/badge.svg)](https://github.com/Reddimus/polymarket-cpp/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Reddimus/polymarket-cpp)](https://github.com/Reddimus/polymarket-cpp/releases)
+[![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Features
