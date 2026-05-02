@@ -5,7 +5,7 @@ add_library(polymarket_core STATIC
 )
 target_compile_features(polymarket_core PUBLIC cxx_std_23)
 target_include_directories(polymarket_core PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
@@ -15,7 +15,7 @@ add_library(polymarket_http STATIC
 )
 target_link_libraries(polymarket_http PUBLIC polymarket_core CURL::libcurl)
 target_include_directories(polymarket_http PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
@@ -29,7 +29,7 @@ add_library(polymarket_crypto STATIC
 )
 target_link_libraries(polymarket_crypto PUBLIC polymarket_core OpenSSL::SSL OpenSSL::Crypto)
 target_include_directories(polymarket_crypto PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
@@ -47,7 +47,7 @@ target_link_libraries(polymarket_clob PUBLIC
     PkgConfig::WEBSOCKETS
 )
 target_include_directories(polymarket_clob PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
@@ -57,7 +57,7 @@ add_library(polymarket_gamma STATIC
 )
 target_link_libraries(polymarket_gamma PUBLIC polymarket_core CURL::libcurl)
 target_include_directories(polymarket_gamma PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
@@ -67,7 +67,7 @@ add_library(polymarket_data STATIC
 )
 target_link_libraries(polymarket_data PUBLIC polymarket_core CURL::libcurl)
 target_include_directories(polymarket_data PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
@@ -82,7 +82,7 @@ target_link_libraries(polymarket_us PUBLIC
     PkgConfig::WEBSOCKETS
 )
 target_include_directories(polymarket_us PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
