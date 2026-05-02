@@ -220,7 +220,12 @@ Result<std::string> Client::get_markets(const MarketFilter& filter) {
     std::string path = "/v1/markets";
     if (filter.event_id) append_query(path, "eventId", *filter.event_id);
     if (filter.active) append_query(path, "active", *filter.active);
+    if (filter.closed) append_query(path, "closed", *filter.closed);
+    if (filter.tag_id) append_query(path, "tagIds", *filter.tag_id);
+    if (filter.end_date_min) append_query(path, "endDateMin", *filter.end_date_min);
+    if (filter.end_date_max) append_query(path, "endDateMax", *filter.end_date_max);
     if (filter.limit) append_query(path, "limit", *filter.limit);
+    if (filter.offset) append_query(path, "offset", *filter.offset);
     if (filter.cursor) append_query(path, "cursor", *filter.cursor);
     return impl_->public_get(path);
 }
@@ -262,6 +267,60 @@ Result<std::string> Client::search(std::string_view query) {
     std::string path = "/v1/search?q=";
     path.append(query);
     return impl_->public_get(path);
+}
+
+// ----- Tags / Settlement / Candles / Health -----
+
+Result<std::string> Client::get_tag_by_slug(std::string_view slug) {
+    std::string path = "/v2/tags/slug/";
+    path.append(slug);
+    return impl_->public_get(path);
+}
+
+Result<std::string> Client::get_tags() {
+    return impl_->public_get("/v2/tags");
+}
+
+Result<std::string> Client::get_settlement(std::string_view market_slug) {
+    std::string path = "/v1/markets/";
+    path.append(market_slug);
+    path.append("/settlement");
+    return impl_->public_get(path);
+}
+
+Result<std::string> Client::get_candles(const CandleRequest& req) {
+    // POST /v1beta1/report/trades/stats with JSON body. Public host.
+    // Use a minimal handcrafted JSON to avoid pulling in a parser
+    // dependency for the SDK consumer surface.
+    std::ostringstream body;
+    body << "{"
+         << R"("symbol":")" << req.symbol << "\","
+         << R"("start_time":)" << req.start_time_ms << ","
+         << R"("end_time":)" << req.end_time_ms << ","
+         << R"("interval":")" << req.interval << "\""
+         << "}";
+
+    std::string url = impl_->public_host;
+    url += "/v1beta1/report/trades/stats";
+    http::Request httpreq;
+    httpreq.method = http::Method::POST;
+    httpreq.url = url;
+    httpreq.json_content();
+    httpreq.set_body(body.str());
+
+    Result<http::Response> resp = impl_->http_client.execute(httpreq);
+    if (!resp.has_value()) return std::unexpected(resp.error());
+    if (!resp->is_success()) {
+        std::ostringstream errmsg;
+        errmsg << "Polymarket US public POST /v1beta1/report/trades/stats "
+               << "returned HTTP " << resp->status_code << ": " << resp->body;
+        return std::unexpected(Error::network(errmsg.str()));
+    }
+    return resp->body;
+}
+
+Result<std::string> Client::get_health() {
+    return impl_->public_get("/v1/health");
 }
 
 // ----- Authenticated Endpoints (api.polymarket.us) -----

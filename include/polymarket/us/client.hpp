@@ -31,8 +31,21 @@ struct EventFilter {
 struct MarketFilter {
     std::optional<std::string> event_id;
     std::optional<bool> active;
+    std::optional<bool> closed;
+    std::optional<int> tag_id;        ///< Numeric tag id from /v2/tags
+    std::optional<std::string> end_date_min;
+    std::optional<std::string> end_date_max;
     std::optional<int> limit;
+    std::optional<int> offset;
     std::optional<std::string> cursor;
+};
+
+/// Candlestick request — POST /v1beta1/report/trades/stats
+struct CandleRequest {
+    std::string symbol;        ///< Per docs: keyed on instrument symbol, not slug
+    std::int64_t start_time_ms = 0;
+    std::int64_t end_time_ms = 0;
+    std::string interval = "5m";  ///< 1m | 5m | 15m | 1h | 4h | 1d
 };
 
 /// Filter for orders
@@ -132,6 +145,28 @@ public:
 
     /// Search events/markets
     [[nodiscard]] Result<std::string> search(std::string_view query);
+
+    // ----- Tags (gateway.polymarket.us /v2/tags) -----
+
+    /// Resolve a tag's numeric id from its slug. The id is what
+    /// /v1/markets's tagIds[] filter expects.
+    [[nodiscard]] Result<std::string> get_tag_by_slug(std::string_view slug);
+
+    /// List all tags.
+    [[nodiscard]] Result<std::string> get_tags();
+
+    // ----- Settlement + Candles (gateway.polymarket.us) -----
+
+    /// Settlement lookup for a market that has resolved.
+    [[nodiscard]] Result<std::string> get_settlement(std::string_view market_slug);
+
+    /// Historical OHLCV via POST /v1beta1/report/trades/stats.
+    /// Body shape per docs.polymarket.us:
+    ///   {symbol, start_time, end_time, interval}
+    [[nodiscard]] Result<std::string> get_candles(const CandleRequest& req);
+
+    /// Health probe — GET /v1/health on the public host.
+    [[nodiscard]] Result<std::string> get_health();
 
     // ----- Authenticated Endpoints -----
 
