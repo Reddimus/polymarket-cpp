@@ -83,23 +83,15 @@ int main() {
       ++failures;
     }
   }
-  {
-    auto t = client.get_tag_by_slug("weather");
-    if (t.has_value()) {
-      std::cout << "[OK] tag(weather): " << t->substr(0, 120) << '\n';
-    } else {
-      std::cerr << "[FAIL] tag(weather): " << t.error().message() << '\n';
-      ++failures;
-    }
-  }
-  // Resolve weather tag id dynamically — same pattern as production
-  // discovery loops. Hardcoding tag_id=38 would silently break if
-  // Polymarket renumbered tags (the markets endpoint would return an
-  // empty list with 200 OK, which the smoke wouldn't notice).
+  // Resolve weather tag id from the tag response — same pattern as
+  // production discovery loops. Hardcoding tag_id=38 would silently
+  // break if Polymarket renumbered tags (the markets endpoint would
+  // return an empty list with 200 OK, which the smoke wouldn't catch).
   int weather_tag_id = -1;
   {
     auto t = client.get_tag_by_slug("weather");
     if (t.has_value()) {
+      std::cout << "[OK] tag(weather): " << t->substr(0, 120) << '\n';
       const auto pos = t->find("\"id\":\"");
       if (pos != std::string::npos) {
         const auto start = pos + 6;
@@ -108,10 +100,13 @@ int main() {
           try {
             weather_tag_id = std::stoi(t->substr(start, end - start));
           } catch (...) {
-            // fall through; we'll skip the markets check below
+            // fall through; markets check will flag the missing id
           }
         }
       }
+    } else {
+      std::cerr << "[FAIL] tag(weather): " << t.error().message() << '\n';
+      ++failures;
     }
   }
   if (weather_tag_id < 0) {
