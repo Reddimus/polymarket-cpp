@@ -10,4 +10,8 @@ if(POLYMARKET_BUILD_EXAMPLES)
     add_executable(example_order_placement order_placement.cpp)
     target_link_libraries(example_order_placement PRIVATE polymarket)
     target_compile_features(example_order_placement PRIVATE cxx_std_23)
+
+    add_executable(example_us_smoke us_smoke.cpp)
+    target_link_libraries(example_us_smoke PRIVATE polymarket)
+    target_compile_features(example_us_smoke PRIVATE cxx_std_23)
 endif()

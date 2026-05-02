@@ -81,6 +81,9 @@ run-market_data: build
 run-order_placement: build
 	$(call run_example,./$(BUILD_DIR)/examples/example_order_placement)
 
+run-us_smoke: build
+	$(call run_example,./$(BUILD_DIR)/examples/example_us_smoke)
+
 # Help
 help:
 	@echo "Polymarket C++ SDK Build System"
@@ -98,3 +101,4 @@ help:
 	@echo "Examples:"
 	@echo "  make run-market_data      - Run market data example"
 	@echo "  make run-order_placement  - Run order placement example"
+	@echo "  make run-us_smoke         - Smoke-test the US client (auth + 5 endpoints)"

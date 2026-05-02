@@ -11,23 +11,15 @@
 namespace polymarket {
 
 /// Get the SDK version string
-constexpr const char* version() noexcept {
-    return POLYMARKET_VERSION_STRING;
-}
+constexpr const char *version() noexcept { return POLYMARKET_VERSION_STRING; }
 
 /// Get the major version number
-constexpr int version_major() noexcept {
-    return POLYMARKET_VERSION_MAJOR;
-}
+constexpr int version_major() noexcept { return POLYMARKET_VERSION_MAJOR; }
 
 /// Get the minor version number
-constexpr int version_minor() noexcept {
-    return POLYMARKET_VERSION_MINOR;
-}
+constexpr int version_minor() noexcept { return POLYMARKET_VERSION_MINOR; }
 
 /// Get the patch version number
-constexpr int version_patch() noexcept {
-    return POLYMARKET_VERSION_PATCH;
-}
+constexpr int version_patch() noexcept { return POLYMARKET_VERSION_PATCH; }
 
 } // namespace polymarket
