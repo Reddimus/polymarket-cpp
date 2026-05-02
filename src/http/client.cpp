@@ -234,12 +234,20 @@ Result<Response> Client::execute(const Request& request) {
     }
 
     // Set timeouts
-    auto timeout_ms = request.timeout.count() > 0 
-        ? request.timeout.count() 
+    auto timeout_ms = request.timeout.count() > 0
+        ? request.timeout.count()
         : config_.default_timeout.count();
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, static_cast<long>(timeout_ms));
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS,
                      static_cast<long>(config_.connect_timeout.count()));
+
+    // Force IPv4 — Docker bridge networks resolve AAAA records but
+    // route only IPv4. Without this, libcurl tries the IPv6 addresses
+    // first, blocks on connect for the full timeout (or worse, spins
+    // in a tight reconnect loop on certain libcurl/glibc combos),
+    // never reaching the IPv4 fallback. Setting CURL_IPRESOLVE_V4 is
+    // the same fix Docker recommends for in-container HTTPS clients.
+    curl_easy_setopt(curl, CURLOPT_IPRESOLVE, (long)CURL_IPRESOLVE_V4);
 
     // TCP options
     if (config_.tcp_nodelay) {
