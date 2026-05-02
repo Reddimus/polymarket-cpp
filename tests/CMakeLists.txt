@@ -15,12 +15,15 @@ add_executable(polymarket_tests
     unit/eip712_test.cpp
     unit/types_test.cpp
     unit/order_builder_test.cpp
+    unit/us_client_test.cpp
 )
 
 target_link_libraries(polymarket_tests PRIVATE
     polymarket_core
     polymarket_crypto
     polymarket_clob
+    polymarket_us
+    polymarket_http
     Catch2::Catch2WithMain
 )
 

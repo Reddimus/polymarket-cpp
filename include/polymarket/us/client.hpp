@@ -56,17 +56,35 @@ struct OrderRequest {
 
 /// Polymarket US API client
 ///
-/// The Polymarket US API is a separate system for USA event trading
-/// using Ed25519 authentication instead of EIP-712.
+/// The Polymarket US API is the CFTC-regulated US event-trading platform.
+/// Uses Ed25519 authentication instead of EIP-712 (which the offshore
+/// CLOB uses).
 ///
-/// Base URLs:
-/// - Gateway: https://us-gateway.polymarket.com
-/// - API: https://us-api.polymarket.com
+/// Two hosts:
+/// - Authed (orders, positions, balances, activities):
+///   https://api.polymarket.us
+/// - Public (markets, books, settlement, tags, candles):
+///   https://gateway.polymarket.us
+///
+/// Auth (verified against docs.polymarket.us 2026-05-02):
+/// - Headers: X-PM-Access-Key, X-PM-Timestamp (unix ms),
+///   X-PM-Signature (base64 Ed25519 sig)
+/// - Canonical message: f"{timestamp}{method}{path}" (no separators,
+///   body NOT signed). Tolerance ±30s.
+/// - Secret format: base64-decoded yields 64 bytes (seed||pub);
+///   first 32 bytes is the Ed25519 seed.
 class Client {
 public:
+    /// Default authed host
+    static constexpr std::string_view kAuthedHost = "https://api.polymarket.us";
+    /// Default public host
+    static constexpr std::string_view kPublicHost = "https://gateway.polymarket.us";
+
     /// Create a new Polymarket US client
-    /// @param base_url Base URL (default: https://us-api.polymarket.com)
-    explicit Client(std::string_view base_url = "https://us-api.polymarket.com");
+    /// @param authed_host Authed REST host (default: api.polymarket.us)
+    /// @param public_host Public REST host (default: gateway.polymarket.us)
+    explicit Client(std::string_view authed_host = kAuthedHost,
+                    std::string_view public_host = kPublicHost);
     ~Client();
 
     Client(const Client&) = delete;
