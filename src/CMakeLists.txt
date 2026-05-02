@@ -71,9 +71,10 @@ target_include_directories(polymarket_data PUBLIC
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
-# Polymarket US library
+# Polymarket US library — REST + WS subscriber (markets channel)
 add_library(polymarket_us STATIC
     us/client.cpp
+    us/ws/subscriber.cpp
 )
 target_link_libraries(polymarket_us PUBLIC 
     polymarket_core 

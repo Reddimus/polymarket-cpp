@@ -6,6 +6,26 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-05-02
+
+### Added
+
+- **`polymarket::us::ws::Subscriber`** — first-cut libwebsockets-based
+  WebSocket subscriber for `wss://api.polymarket.us/v1/ws/markets`.
+  Performs the Ed25519-signed handshake (same canonical message format
+  as the REST client: `{timestamp}{method}{path}`), sends the
+  `SUBSCRIPTION_TYPE_MARKET_DATA` subscribe frame, drives a heartbeat
+  on a configurable interval, and surfaces inbound frames via an
+  `OnMessage` callback. Single-shard (≤100 markets per Polymarket's
+  documented cap), single-channel, no exponential reconnect ladder
+  yet — caller drives reconnect via a simple `connect()` retry on
+  state-change. See header comment for the deferred-feature list.
+- New `examples/us_smoke.cpp` is unaffected; the new subscriber lives
+  alongside the REST client in `polymarket_us` so consumers don't
+  need a new FetchContent target.
+
+[0.1.2]: https://github.com/Reddimus/polymarket-cpp/releases/tag/v0.1.2
+
 ## [0.1.1] - 2026-05-02
 
 ### Added
