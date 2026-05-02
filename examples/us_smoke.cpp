@@ -92,15 +92,47 @@ int main() {
       ++failures;
     }
   }
+  // Resolve weather tag id dynamically — same pattern as production
+  // discovery loops. Hardcoding tag_id=38 would silently break if
+  // Polymarket renumbered tags (the markets endpoint would return an
+  // empty list with 200 OK, which the smoke wouldn't notice).
+  int weather_tag_id = -1;
   {
+    auto t = client.get_tag_by_slug("weather");
+    if (t.has_value()) {
+      const auto pos = t->find("\"id\":\"");
+      if (pos != std::string::npos) {
+        const auto start = pos + 6;
+        const auto end = t->find('"', start);
+        if (end != std::string::npos) {
+          try {
+            weather_tag_id = std::stoi(t->substr(start, end - start));
+          } catch (...) {
+            // fall through; we'll skip the markets check below
+          }
+        }
+      }
+    }
+  }
+  if (weather_tag_id < 0) {
+    std::cerr
+        << "[FAIL] could not parse tag id from get_tag_by_slug response\n";
+    ++failures;
+  } else {
     us::MarketFilter f;
-    f.tag_id = 38; // weather, per the live tag id
+    f.tag_id = weather_tag_id;
     f.active = true;
     f.closed = false;
     f.limit = 3;
     auto m = client.get_markets(f);
-    if (m.has_value()) {
-      std::cout << "[OK] markets(tag=38, limit=3) bytes=" << m->size() << '\n';
+    if (m.has_value() && !m->empty() &&
+        m->find("\"slug\"") != std::string::npos) {
+      std::cout << "[OK] markets(tag=" << weather_tag_id
+                << ", limit=3) bytes=" << m->size() << '\n';
+    } else if (m.has_value()) {
+      std::cerr << "[FAIL] markets returned empty payload — tag id "
+                << weather_tag_id << " may be wrong\n";
+      ++failures;
     } else {
       std::cerr << "[FAIL] markets: " << m.error().message() << '\n';
       ++failures;
