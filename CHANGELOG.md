@@ -6,6 +6,47 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-05-02
+
+### Added
+
+- **Polymarket US REST client** (`polymarket::us::Client`) — full
+  Ed25519-signed access to `api.polymarket.us` (authed) and
+  `gateway.polymarket.us` (public). 15+ endpoints: markets list +
+  detail, orderbook, settlement, tags, candles, account balances,
+  positions, activities, orders. `set_credentials()` validates the
+  base64 secret decodes to exactly 64 bytes and slices `[:32]` for
+  the Ed25519 seed per the docs.polymarket.us spec.
+- **Canonical signing**: literal `{timestamp}{method}{path}` (no
+  separators, body NOT signed); ±30s tolerance window respected via
+  `now_unix_ms()`. Path component is signed without query string.
+- **Gateway endpoints**: `get_tag_by_slug`, `get_settlement`,
+  `get_candles`, `get_health` against the appropriate host.
+
+### Fixed
+
+- **`append_query` bool overload was tail-recursing under -O2**:
+  the `const char*` literal `"true"` / `"false"` bound to the bool
+  overload via standard pointer-to-bool conversion (which ranks
+  higher than the user-defined string_view conversion). Symptom was
+  100% CPU spin with no syscalls inside `get_markets()`. Fix uses
+  `std::string_view_literals`. Pinned by a `[us][regression]`
+  Catch2 test that hangs forever pre-fix and returns in <1ms post-fix.
+- **`http::Client` forced to IPv4** via `CURLOPT_IPRESOLVE = V4`.
+  Docker bridge networks resolve AAAA records but route only IPv4;
+  without this, libcurl tried IPv6 first and either blocked for the
+  full 30s timeout or, on certain libcurl/glibc combos, spun in a
+  tight reconnect loop.
+- **`get_candles` routes through the authed host**, not the public
+  gateway. Field names normalized to camelCase
+  (`startTimeMs`/`endTimeMs`) per the docs response shape.
+- **CMake**: `polymarket_us` now correctly links `polymarket_http`
+  (previously relied on transitive curl from a sibling target;
+  downstream FetchContent consumers got undefined-reference errors).
+- **CMake**: `${CMAKE_SOURCE_DIR}` → `${PROJECT_SOURCE_DIR}` in
+  `src/CMakeLists.txt` so includes resolve correctly when the SDK
+  is consumed via FetchContent rather than as the top-level project.
+
 ### CI
 
 - First-ever CI workflow added — build + test + lint on Ubuntu 24.04,
@@ -46,4 +87,5 @@ Stubs (TODO: implement):
 - WebSocket subscriptions / order-history streaming
 - ECDSA public-key recovery in secp256k1 (signing works; recovery TODO)
 
-[Unreleased]: https://github.com/Reddimus/polymarket-cpp/commits/main
+[Unreleased]: https://github.com/Reddimus/polymarket-cpp/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Reddimus/polymarket-cpp/releases/tag/v0.1.0
