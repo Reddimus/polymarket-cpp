@@ -16,6 +16,7 @@ add_executable(polymarket_tests
     unit/types_test.cpp
     unit/order_builder_test.cpp
     unit/us_client_test.cpp
+    unit/ws_subscriber_test.cpp
 )
 
 target_link_libraries(polymarket_tests PRIVATE

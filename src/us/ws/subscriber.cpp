@@ -336,6 +336,13 @@ Result<void> Subscriber::connect() {
 }
 
 void Subscriber::disconnect() {
+  // Defensive: the destructor calls disconnect(), but the defaulted
+  // move ctor/assign leave impl_ nullptr in the moved-from object.
+  // Without this guard the moved-from destructor would dereference a
+  // null unique_ptr and crash. The same guard makes is_connected()
+  // safe to call on a moved-from Subscriber.
+  if (!impl_)
+    return;
   impl_->should_stop.store(true, std::memory_order_release);
   impl_->connected.store(false, std::memory_order_release);
   if (impl_->service_thread.joinable())
@@ -348,6 +355,8 @@ void Subscriber::disconnect() {
 }
 
 bool Subscriber::is_connected() const noexcept {
+  if (!impl_)
+    return false;
   return impl_->connected.load(std::memory_order_acquire);
 }
 
