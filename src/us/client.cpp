@@ -55,11 +55,18 @@ void append_query(std::string& url, std::string_view key, std::string_view value
 }
 
 void append_query(std::string& url, std::string_view key, bool value) {
-    append_query(url, key, value ? "true" : "false");
+    // Use string_view literals so the inner call resolves to the
+    // string_view overload, not back into this bool overload (which
+    // would infinite-recurse — `const char*` ranks higher to bool than
+    // to string_view per C++ overload resolution, since the
+    // pointer→bool conversion is a standard conversion while
+    // pointer→string_view requires a user-defined conversion).
+    using namespace std::string_view_literals;
+    append_query(url, key, value ? "true"sv : "false"sv);
 }
 
 void append_query(std::string& url, std::string_view key, int value) {
-    append_query(url, key, std::to_string(value));
+    append_query(url, key, std::string_view(std::to_string(value)));
 }
 
 }  // namespace
@@ -92,13 +99,10 @@ struct Client::Impl {
     Result<std::string> public_get(std::string_view path) {
         std::string url = public_host;
         url += path;
-        std::cerr << "[pm::us::public_get] " << url << '\n';
         http::Request req;
         req.method = http::Method::GET;
         req.url = url;
         Result<http::Response> resp = http_client.execute(req);
-        std::cerr << "[pm::us::public_get] returned has_value="
-                  << resp.has_value() << '\n';
         if (!resp.has_value()) {
             return std::unexpected(resp.error());
         }
@@ -221,19 +225,16 @@ Result<std::string> Client::get_event(std::string_view event_id) {
 }
 
 Result<std::string> Client::get_markets(const MarketFilter& filter) {
-    std::cerr << "[pm::us::get_markets] enter\n";
     std::string path = "/v1/markets";
-    std::cerr << "[gm] path=" << path << '\n';
-    if (filter.event_id) { append_query(path, "eventId", *filter.event_id); std::cerr << "[gm] +event_id\n"; }
-    if (filter.active) { append_query(path, "active", *filter.active); std::cerr << "[gm] +active\n"; }
-    if (filter.closed) { append_query(path, "closed", *filter.closed); std::cerr << "[gm] +closed\n"; }
-    if (filter.tag_id) { append_query(path, "tagIds", *filter.tag_id); std::cerr << "[gm] +tag_id\n"; }
-    if (filter.end_date_min) { append_query(path, "endDateMin", *filter.end_date_min); std::cerr << "[gm] +end_date_min\n"; }
-    if (filter.end_date_max) { append_query(path, "endDateMax", *filter.end_date_max); std::cerr << "[gm] +end_date_max\n"; }
-    if (filter.limit) { append_query(path, "limit", *filter.limit); std::cerr << "[gm] +limit\n"; }
-    if (filter.offset) { append_query(path, "offset", *filter.offset); std::cerr << "[gm] +offset\n"; }
-    if (filter.cursor) { append_query(path, "cursor", *filter.cursor); std::cerr << "[gm] +cursor\n"; }
-    std::cerr << "[pm::us::get_markets] path built: " << path << '\n';
+    if (filter.event_id) append_query(path, "eventId", *filter.event_id);
+    if (filter.active) append_query(path, "active", *filter.active);
+    if (filter.closed) append_query(path, "closed", *filter.closed);
+    if (filter.tag_id) append_query(path, "tagIds", *filter.tag_id);
+    if (filter.end_date_min) append_query(path, "endDateMin", *filter.end_date_min);
+    if (filter.end_date_max) append_query(path, "endDateMax", *filter.end_date_max);
+    if (filter.limit) append_query(path, "limit", *filter.limit);
+    if (filter.offset) append_query(path, "offset", *filter.offset);
+    if (filter.cursor) append_query(path, "cursor", *filter.cursor);
     return impl_->public_get(path);
 }
 

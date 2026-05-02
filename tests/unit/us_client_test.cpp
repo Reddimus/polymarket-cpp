@@ -91,6 +91,50 @@ TEST_CASE("Polymarket US authed call without credentials fails fast",
                  Catch::Matchers::ContainsSubstring("set_credentials"));
 }
 
+TEST_CASE("Polymarket US get_markets path-build does not infinite-recurse",
+          "[us][regression]") {
+    // Regression test for a real bug shipped briefly in 2026-05-02:
+    // append_query had a bool overload that called itself with a
+    // `const char*` literal ("true"/"false"). C++ overload resolution
+    // ranked `const char*` → bool (standard conversion) higher than
+    // `const char*` → string_view (user-defined), so the bool overload
+    // re-entered itself instead of the string_view overload. With -O2
+    // tail-call optimization, the resulting infinite recursion looked
+    // like a hang at 100% CPU with no syscalls.
+    //
+    // The fix uses `string_view_literals` in the bool body. This test
+    // doesn't probe overload resolution directly — it just calls
+    // get_markets() with a fully-populated filter (every overload
+    // exercised) and times out fast if the bug regresses. The test
+    // itself runs in <100ms when healthy.
+    Client client;
+    Credentials creds;
+    creds.key_id = "test";
+    creds.secret_key = make_synthetic_secret();
+    REQUIRE(client.set_credentials(std::move(creds)).has_value());
+
+    MarketFilter f;
+    f.event_id = "evt-1";
+    f.active = true;
+    f.closed = false;
+    f.tag_id = 38;
+    f.end_date_min = "2026-05-01T00:00:00Z";
+    f.end_date_max = "2026-12-31T00:00:00Z";
+    f.limit = 200;
+    f.offset = 0;
+    f.cursor = "abc";
+
+    // We don't care if this succeeds (it'll fail on the network call
+    // since we have no live host stub). We care that it RETURNS at
+    // all — pre-fix it spun forever inside the path-build loop.
+    auto result = client.get_markets(f);
+    // Either a successful Result or a network/validation Error is fine
+    // — both prove path-build returned. A hang fails this test via
+    // ctest's per-test timeout.
+    (void)result;
+    SUCCEED("get_markets returned without infinite-recursing");
+}
+
 TEST_CASE(
     "Polymarket US Ed25519 sign-message round trip uses first 32 bytes as seed",
     "[us][auth]") {
