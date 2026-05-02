@@ -265,6 +265,13 @@ Result<void> Subscriber::connect() {
     return std::unexpected(
         Error::validation("call configure() before connect()"));
 
+  // Idempotent: tear down any prior context + service thread before
+  // standing a new one up. Without this, a reconnect after a transient
+  // disconnect (e.g. 502 from the upstream) would move-assign a new
+  // std::thread over a still-joinable service thread, calling
+  // std::terminate() and crashing the process.
+  disconnect();
+
   if (auto rc = impl_->refresh_auth(); !rc.has_value())
     return std::unexpected(rc.error());
 
