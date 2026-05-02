@@ -297,34 +297,27 @@ Result<std::string> Client::get_settlement(std::string_view market_slug) {
 }
 
 Result<std::string> Client::get_candles(const CandleRequest& req) {
-    // POST /v1beta1/report/trades/stats with JSON body. Public host.
-    // Use a minimal handcrafted JSON to avoid pulling in a parser
-    // dependency for the SDK consumer surface.
+    // POST /v1beta1/report/trades/stats — verified 2026-05-02 to live
+    // on api.polymarket.us (the AUTHED host) and require Ed25519
+    // headers, NOT the public gateway. Calling on gateway returns
+    // 404; calling on api with no auth returns 401 with "missing
+    // required API key headers" in the gRPC body. So this endpoint
+    // routes through authed_request — caller must have already
+    // invoked set_credentials().
+    //
+    // Field naming: docs and worked examples both use camelCase
+    // (startTimeMs / endTimeMs). Earlier snake_case attempts produced
+    // 404; the gateway/api routing was the actual issue, but we
+    // standardized on camelCase to match the documented schema.
     std::ostringstream body;
     body << "{"
          << R"("symbol":")" << req.symbol << "\","
-         << R"("start_time":)" << req.start_time_ms << ","
-         << R"("end_time":)" << req.end_time_ms << ","
+         << R"("startTimeMs":)" << req.start_time_ms << ","
+         << R"("endTimeMs":)" << req.end_time_ms << ","
          << R"("interval":")" << req.interval << "\""
          << "}";
-
-    std::string url = impl_->public_host;
-    url += "/v1beta1/report/trades/stats";
-    http::Request httpreq;
-    httpreq.method = http::Method::POST;
-    httpreq.url = url;
-    httpreq.json_content();
-    httpreq.set_body(body.str());
-
-    Result<http::Response> resp = impl_->http_client.execute(httpreq);
-    if (!resp.has_value()) return std::unexpected(resp.error());
-    if (!resp->is_success()) {
-        std::ostringstream errmsg;
-        errmsg << "Polymarket US public POST /v1beta1/report/trades/stats "
-               << "returned HTTP " << resp->status_code << ": " << resp->body;
-        return std::unexpected(Error::network(errmsg.str()));
-    }
-    return resp->body;
+    return impl_->authed_request(http::Method::POST,
+                                 "/v1beta1/report/trades/stats", body.str());
 }
 
 Result<std::string> Client::get_health() {
