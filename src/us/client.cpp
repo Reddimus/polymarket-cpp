@@ -91,10 +91,13 @@ struct Client::Impl {
     Result<std::string> public_get(std::string_view path) {
         std::string url = public_host;
         url += path;
+        std::cerr << "[pm::us::public_get] " << url << '\n';
         http::Request req;
         req.method = http::Method::GET;
         req.url = url;
         Result<http::Response> resp = http_client.execute(req);
+        std::cerr << "[pm::us::public_get] returned has_value="
+                  << resp.has_value() << '\n';
         if (!resp.has_value()) {
             return std::unexpected(resp.error());
         }
