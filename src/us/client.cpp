@@ -221,6 +221,7 @@ Result<std::string> Client::get_event(std::string_view event_id) {
 }
 
 Result<std::string> Client::get_markets(const MarketFilter& filter) {
+    std::cerr << "[pm::us::get_markets] enter\n";
     std::string path = "/v1/markets";
     if (filter.event_id) append_query(path, "eventId", *filter.event_id);
     if (filter.active) append_query(path, "active", *filter.active);
@@ -231,6 +232,7 @@ Result<std::string> Client::get_markets(const MarketFilter& filter) {
     if (filter.limit) append_query(path, "limit", *filter.limit);
     if (filter.offset) append_query(path, "offset", *filter.offset);
     if (filter.cursor) append_query(path, "cursor", *filter.cursor);
+    std::cerr << "[pm::us::get_markets] path built: " << path << '\n';
     return impl_->public_get(path);
 }
 
