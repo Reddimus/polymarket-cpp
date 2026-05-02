@@ -78,6 +78,7 @@ add_library(polymarket_us STATIC
 target_link_libraries(polymarket_us PUBLIC 
     polymarket_core 
     polymarket_crypto 
+    polymarket_http
     CURL::libcurl 
     PkgConfig::WEBSOCKETS
 )
