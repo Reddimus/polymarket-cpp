@@ -6,6 +6,20 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-05-02
+
+### Fixed
+
+- **`polymarket::us::ws::Subscriber::connect()` is now idempotent.**
+  Calling `connect()` after a transient disconnect (e.g. an upstream
+  502) used to move-assign a fresh `std::thread` over the old
+  service thread while it was still joinable, which calls
+  `std::terminate()` and crashes the host process. The connect path
+  now tears down the prior context + thread via `disconnect()`
+  before standing up the new ones. Observed in the
+  `polymarket-websocket` service as a single
+  `terminate called without an active exception` after a 502.
+
 ## [0.1.2] - 2026-05-02
 
 ### Added
