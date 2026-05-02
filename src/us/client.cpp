@@ -18,6 +18,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <iostream>
 #include <sstream>
 
 namespace polymarket::us {
