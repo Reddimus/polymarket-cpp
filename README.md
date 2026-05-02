@@ -136,6 +136,45 @@ int main() {
 }
 ```
 
+### Polymarket US (Ed25519, CFTC-regulated)
+
+```cpp
+#include <polymarket/us/client.hpp>
+#include <iostream>
+
+int main() {
+    using namespace polymarket;
+
+    us::Client client;
+    // Secret is base64 of 64 bytes (seed||pub) per docs.polymarket.us;
+    // set_credentials() validates the length and slices [:32] for Ed25519.
+    auto rc = client.set_credentials({
+        .key_id = std::getenv("PM_US_KEY_ID"),
+        .secret_key = std::getenv("PM_US_SECRET"),
+    });
+    if (!rc) return 1;
+
+    // Public host (gateway.polymarket.us) — no auth needed
+    us::MarketFilter f;
+    f.tag_id = 38;  // weather
+    f.active = true;
+    f.limit = 10;
+    auto markets = client.get_markets(f);
+
+    // Authed host (api.polymarket.us) — Ed25519 headers added by the SDK
+    auto balance = client.get_balance();
+    auto positions = client.get_positions();
+
+    std::cout << "balance: " << balance.value_or("error") << '\n';
+    return 0;
+}
+```
+
+For an end-to-end smoke test (5 endpoints, <1s) see
+[`examples/us_smoke.cpp`](examples/us_smoke.cpp) — run with
+`make run-us_smoke` after exporting `PM_US_KEY_ID` and
+`PM_US_SECRET_FILE`.
+
 ### Place Orders (Authenticated)
 
 ```cpp
@@ -267,8 +306,10 @@ flowchart TD
 | | Series | ⏳ Stub |
 | **Data** | Positions | ⏳ Stub |
 | | Trades | ⏳ Stub |
-| **US** | Events/Markets | ⏳ Stub |
-| | Orders | ⏳ Stub |
+| **US (v0.1.0)** | Health, Tags, Markets, Orderbook, Settlement, Candles | ✅ |
+| | Account Balance, Positions, Activities | ✅ |
+| | Orders (single + batched + cancel + modify) | ✅ |
+| | WebSocket subscriber | ⏳ Stub |
 
 ## Directory Structure
 
