@@ -328,15 +328,46 @@ Result<std::string> Client::get_health() {
 // ----- Authenticated Endpoints (api.polymarket.us) -----
 
 Result<std::string> Client::place_order(const OrderRequest &request) {
-  // Build the order JSON. Caller-side schema mirrors docs:
-  //   marketSlug, intent, quantity, price, timeInForce, type
+  // Map caller-side `side` ("buy"/"sell") to the docs intent enum.
+  // Polymarket also exposes BUY_SHORT/SELL_SHORT for short positions,
+  // but that's a deliberate trader-side decision; the long-side
+  // mapping is what every spot/limit buyer needs. Reject other values
+  // explicitly so a typo can't silently degrade to a buy.
+  std::string intent;
+  if (request.side == "buy") {
+    intent = "ORDER_INTENT_BUY_LONG";
+  } else if (request.side == "sell") {
+    intent = "ORDER_INTENT_SELL_LONG";
+  } else {
+    return std::unexpected(Error::validation(
+        "OrderRequest.side must be 'buy' or 'sell' (got: " + request.side +
+        ")"));
+  }
+
+  // Map caller-side `type` ("limit"/"market") to the docs enum.
+  std::string type_str;
+  if (request.type == "limit") {
+    type_str = "ORDER_TYPE_LIMIT";
+  } else if (request.type == "market") {
+    type_str = "ORDER_TYPE_MARKET";
+  } else {
+    return std::unexpected(Error::validation(
+        "OrderRequest.type must be 'limit' or 'market' (got: " + request.type +
+        ")"));
+  }
+
   std::ostringstream body;
   body << "{" << R"("marketSlug":")" << request.market_id << "\","
-       << R"("intent":"ORDER_INTENT_BUY_LONG",)" // TODO map side->intent
-       << R"("type":"ORDER_TYPE_LIMIT",)"
-       << R"("timeInForce":"TIME_IN_FORCE_GOOD_TILL_CANCEL",)"
+       << R"("intent":")" << intent << R"(",)" << R"("type":")" << type_str
+       << R"(",)" << R"("timeInForce":"TIME_IN_FORCE_GOOD_TILL_CANCEL",)"
        << R"("quantity":")" << request.size.to_string() << "\","
-       << R"("price":")" << request.price.to_string() << "\"" << "}";
+       << R"("price":")" << request.price.to_string() << "\"";
+  // post-only is "participateDontInitiate" per docs — emit only when
+  // explicitly requested, so the wire payload stays minimal otherwise.
+  if (request.post_only.value_or(false)) {
+    body << R"(,"participateDontInitiate":true)";
+  }
+  body << "}";
   return impl_->authed_request(http::Method::POST, "/v1/orders", body.str());
 }
 

@@ -177,3 +177,44 @@ TEST_CASE(
     REQUIRE(roundtripped[i] == seed[i]);
   }
 }
+
+TEST_CASE("Polymarket US place_order rejects unknown side without HTTP call",
+          "[us][orders][validation]") {
+  // Pre-fix the side field was silently ignored and every order went
+  // out as ORDER_INTENT_BUY_LONG. Validation fires before the network
+  // call, so we don't need credentials wired to exercise it.
+  using namespace polymarket;
+  using namespace polymarket::us;
+
+  Client client;
+  OrderRequest req;
+  req.market_id = "tc-temp-nychigh-2026-05-02-gte56lt57";
+  req.side = "wrong"; // typo — must be rejected
+  req.type = "limit";
+  req.price = Decimal::from_string("0.50");
+  req.size = Decimal::from_string("10");
+
+  auto result = client.place_order(req);
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE_THAT(result.error().message(),
+               Catch::Matchers::ContainsSubstring("side"));
+}
+
+TEST_CASE("Polymarket US place_order rejects unknown type without HTTP call",
+          "[us][orders][validation]") {
+  using namespace polymarket;
+  using namespace polymarket::us;
+
+  Client client;
+  OrderRequest req;
+  req.market_id = "tc-temp-nychigh-2026-05-02-gte56lt57";
+  req.side = "buy";
+  req.type = "stop"; // unsupported — must be rejected
+  req.price = Decimal::from_string("0.50");
+  req.size = Decimal::from_string("10");
+
+  auto result = client.place_order(req);
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE_THAT(result.error().message(),
+               Catch::Matchers::ContainsSubstring("type"));
+}
