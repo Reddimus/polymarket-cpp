@@ -6,6 +6,35 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-02
+
+### Added
+
+- **`examples/us_smoke.cpp`** — operator-runnable end-to-end smoke
+  test for the US client. Reads `PM_US_KEY_ID` + `PM_US_SECRET_FILE`
+  from env, validates Ed25519 setup, and hits 5 endpoints
+  (`/v1/health`, `/v2/tags/slug/weather`, `/v1/markets`,
+  `/v1/account/balances`, `/v1/portfolio/positions`) in <1s.
+  Wired through `make run-us_smoke`.
+- **README**: new "Polymarket US (Ed25519, CFTC-regulated)" usage
+  section + API Coverage table updated to reflect v0.1.0 surface
+  (was still marked ⏳ Stub).
+
+### Fixed
+
+- **`.github/workflows/release.yml`** preserves backticks in the
+  release body. The previous version captured the changelog
+  excerpt into a shell variable then `echo`-ed it into
+  `GITHUB_OUTPUT`; bash treated backticks as command substitution
+  and silently stripped every inline `code` span. Now uses
+  `--notes-file` for byte-preserving release notes.
+
+### Updated
+
+- **`CLAUDE.md`** refreshed post-v0.1.0: US client now documented
+  as implemented, tests are Catch2 (not GoogleTest), v0.1.0
+  tagged + first release notes.
+
 ## [0.1.0] - 2026-05-02
 
 ### Added
@@ -87,5 +116,6 @@ Stubs (TODO: implement):
 - WebSocket subscriptions / order-history streaming
 - ECDSA public-key recovery in secp256k1 (signing works; recovery TODO)
 
-[Unreleased]: https://github.com/Reddimus/polymarket-cpp/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Reddimus/polymarket-cpp/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Reddimus/polymarket-cpp/releases/tag/v0.1.1
 [0.1.0]: https://github.com/Reddimus/polymarket-cpp/releases/tag/v0.1.0
