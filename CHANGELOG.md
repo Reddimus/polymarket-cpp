@@ -6,6 +6,22 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-05-02
+
+### Fixed
+
+- **`polymarket::us::Client::place_order()` now honors `OrderRequest.side`
+  and `OrderRequest.type` instead of hardcoding `ORDER_INTENT_BUY_LONG`
+  / `ORDER_TYPE_LIMIT`.** A trader passing `side="sell"` previously
+  submitted a BUY order silently; any typo or unsupported value did
+  the same. The mapping is `buy → BUY_LONG`, `sell → SELL_LONG`,
+  `limit → LIMIT`, `market → MARKET`, with `post_only=true` emitted
+  as `"participateDontInitiate":true` per docs. Unknown values now
+  return `Error::validation` before any HTTP call. Short-side
+  intents (`BUY_SHORT` / `SELL_SHORT`) are deliberately not mapped
+  from a string — they warrant their own typed entry point. Two
+  regression tests added (26 total, was 24).
+
 ## [0.1.3] - 2026-05-02
 
 ### Fixed
