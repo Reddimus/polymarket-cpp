@@ -6,6 +6,25 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-05-03
+
+### Added
+
+- **`polymarket::us::ws::Subscriber::subscribe_trades(slugs)`** — sends
+  `SUBSCRIPTION_TYPE_TRADE` for the given market slugs. Polymarket
+  multiplexes orderbook deltas and executed trades on the same
+  connection, but each subscription type is its own subscribe frame.
+  Without this, the consumer had no way to ask for trades; the
+  `polymarket-tick-archiver`'s newly-shipped trade-stream archiver
+  was sitting at `trades_ok=0` indefinitely. Same 100-slug shard cap
+  + same validation path as `subscribe_market_data`.
+- Internal: `build_subscribe_frame` now takes the subscription-type
+  literal as a parameter, and slug validation is shared between the
+  two subscribe methods via a small `validate_slugs` helper.
+- Test: `subscribe_trades` shares the same empty-list /
+  not-connected / 100-slug-cap validation as `subscribe_market_data`
+  (1 new case, suite total now 33 was 32).
+
 ## [0.1.4] - 2026-05-02
 
 ### Fixed

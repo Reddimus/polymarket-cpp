@@ -89,6 +89,27 @@ TEST_CASE("WS Subscriber subscribe over the 100-slug shard cap is rejected",
   REQUIRE_FALSE(rc.has_value());
 }
 
+TEST_CASE("WS Subscriber subscribe_trades shares the same validation path",
+          "[us][ws][validation]") {
+  // SUBSCRIPTION_TYPE_TRADE goes through the same shard cap and
+  // empty-list rejection as SUBSCRIPTION_TYPE_MARKET_DATA.
+  Subscriber sub;
+  REQUIRE(sub.configure(make_test_config()).has_value());
+  // Empty list rejected.
+  REQUIRE_FALSE(sub.subscribe_trades({}).has_value());
+  // Pre-connect rejected with NetworkError ("not connected").
+  std::vector<std::string> slugs{"tc-temp-nychigh-2026-05-02-gte56lt57"};
+  auto rc = sub.subscribe_trades(slugs);
+  REQUIRE_FALSE(rc.has_value());
+  // Oversized list rejected.
+  std::vector<std::string> too_many;
+  too_many.reserve(101);
+  for (int i = 0; i < 101; ++i) {
+    too_many.push_back("slug-" + std::to_string(i));
+  }
+  REQUIRE_FALSE(sub.subscribe_trades(too_many).has_value());
+}
+
 TEST_CASE("WS Subscriber move-then-destruct does not crash",
           "[us][ws][regression][lifecycle]") {
   // Regression test: the defaulted move ctor leaves impl_ nullptr in

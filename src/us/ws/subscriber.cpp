@@ -47,14 +47,16 @@ std::string now_unix_ms() {
       std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
 }
 
-/// Build the SUBSCRIPTION_TYPE_MARKET_DATA frame. Hand-rolled JSON is
-/// fine here — flat shape, escape-free strings (slugs are kebab-case
-/// ASCII).
-std::string build_subscribe_frame(const std::vector<std::string> &slugs,
+/// Build a subscribe frame for the given subscription type. Hand-rolled
+/// JSON is fine here — flat shape, escape-free strings (slugs are
+/// kebab-case ASCII, subscription_type is a fixed enum literal).
+std::string build_subscribe_frame(std::string_view subscription_type,
+                                  const std::vector<std::string> &slugs,
                                   std::string_view request_id) {
   std::ostringstream o;
   o << R"({"subscribe":{"requestId":")" << request_id
-    << R"(","subscriptionType":"SUBSCRIPTION_TYPE_MARKET_DATA","marketSlugs":[)";
+    << R"(","subscriptionType":")" << subscription_type
+    << R"(","marketSlugs":[)";
   for (std::size_t i = 0; i < slugs.size(); ++i) {
     if (i)
       o << ',';
@@ -360,10 +362,9 @@ bool Subscriber::is_connected() const noexcept {
   return impl_->connected.load(std::memory_order_acquire);
 }
 
-Result<void> Subscriber::subscribe_market_data(
-    const std::vector<std::string> &market_slugs) {
-  if (!is_connected())
-    return std::unexpected(Error::network("not connected"));
+namespace {
+
+Result<void> validate_slugs(const std::vector<std::string> &market_slugs) {
   if (market_slugs.empty())
     return std::unexpected(
         Error::validation("subscribe requires at least one market slug"));
@@ -371,11 +372,36 @@ Result<void> Subscriber::subscribe_market_data(
     return std::unexpected(
         Error::validation("Polymarket caps a single subscription at 100 "
                           "markets; shard upstream"));
+  return {};
+}
+
+} // namespace
+
+Result<void> Subscriber::subscribe_market_data(
+    const std::vector<std::string> &market_slugs) {
+  if (!is_connected())
+    return std::unexpected(Error::network("not connected"));
+  if (auto v = validate_slugs(market_slugs); !v.has_value())
+    return std::unexpected(v.error());
 
   // Use the timestamp as the request id — debugging-friendly and
   // unique-enough for our single-Subscriber-per-shard scope.
-  const std::string request_id = "sub-" + now_unix_ms();
-  impl_->enqueue(build_subscribe_frame(market_slugs, request_id));
+  const std::string request_id = "md-" + now_unix_ms();
+  impl_->enqueue(build_subscribe_frame("SUBSCRIPTION_TYPE_MARKET_DATA",
+                                       market_slugs, request_id));
+  return {};
+}
+
+Result<void>
+Subscriber::subscribe_trades(const std::vector<std::string> &market_slugs) {
+  if (!is_connected())
+    return std::unexpected(Error::network("not connected"));
+  if (auto v = validate_slugs(market_slugs); !v.has_value())
+    return std::unexpected(v.error());
+
+  const std::string request_id = "tr-" + now_unix_ms();
+  impl_->enqueue(build_subscribe_frame("SUBSCRIPTION_TYPE_TRADE", market_slugs,
+                                       request_id));
   return {};
 }
 

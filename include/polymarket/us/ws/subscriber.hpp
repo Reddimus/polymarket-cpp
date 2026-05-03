@@ -95,6 +95,14 @@ public:
   [[nodiscard]] Result<void>
   subscribe_market_data(const std::vector<std::string> &market_slugs);
 
+  /// Send the SUBSCRIPTION_TYPE_TRADE subscribe message for the given
+  /// slugs. Polymarket multiplexes orderbook deltas and executed
+  /// trades on the same connection; subscribe to both after connect()
+  /// to receive the full market-data feed. Same 100-slug shard cap as
+  /// subscribe_market_data().
+  [[nodiscard]] Result<void>
+  subscribe_trades(const std::vector<std::string> &market_slugs);
+
   void on_message(OnMessage cb);
   void on_state_change(OnStateChange cb);
 
