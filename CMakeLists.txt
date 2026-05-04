@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(polymarket-cpp VERSION 0.1.5 LANGUAGES CXX)
+project(polymarket-cpp VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,6 +12,7 @@ include(CMakePackageConfigHelpers)
 # Options
 option(POLYMARKET_BUILD_TESTS "Build tests" ON)
 option(POLYMARKET_BUILD_EXAMPLES "Build examples" ON)
+option(POLYMARKET_BUILD_APPS "Build production CLI binaries (apps/)" ON)
 option(POLYMARKET_ENABLE_LTO "Enable Link Time Optimization" ON)
 option(POLYMARKET_NATIVE_ARCH "Use -march=native for CPU-specific tuning" OFF)
 option(POLYMARKET_USE_CPP26 "Enable C++26 features (experimental)" OFF)
@@ -65,6 +66,10 @@ endif()
 
 if(POLYMARKET_BUILD_EXAMPLES)
     add_subdirectory(examples)
+endif()
+
+if(POLYMARKET_BUILD_APPS)
+    add_subdirectory(apps)
 endif()
 
 # Install targets

@@ -183,6 +183,12 @@ public:
   /// List orders
   [[nodiscard]] Result<std::string> get_orders(const OrderFilter &filter = {});
 
+  /// Get a single order by id. Used by trader-side reconciliation to
+  /// poll an open order's status (e.g. live_pending → live_filled).
+  /// Endpoint: GET /v1/order/{order_id} — mirrors cancel_order's
+  /// singular path. Returns the JSON body verbatim.
+  [[nodiscard]] Result<std::string> get_order_by_id(std::string_view order_id);
+
   /// Get positions
   [[nodiscard]] Result<std::string> get_positions();
 

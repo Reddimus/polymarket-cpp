@@ -218,3 +218,19 @@ TEST_CASE("Polymarket US place_order rejects unknown type without HTTP call",
   REQUIRE_THAT(result.error().message(),
                Catch::Matchers::ContainsSubstring("type"));
 }
+
+TEST_CASE("Polymarket US get_order_by_id requires credentials",
+          "[us][orders][validation]") {
+  // Reconciliation polling needs to read a single order's status to
+  // promote live_pending → live_filled. The endpoint is authenticated;
+  // calling it without set_credentials() must fail with a clear
+  // validation error rather than panicking on the missing signer.
+  using namespace polymarket;
+  using namespace polymarket::us;
+
+  Client client;
+  auto result = client.get_order_by_id("test-order-123");
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE_THAT(result.error().message(),
+               Catch::Matchers::ContainsSubstring("credentials"));
+}

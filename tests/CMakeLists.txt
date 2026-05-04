@@ -16,6 +16,7 @@ add_executable(polymarket_tests
     unit/types_test.cpp
     unit/order_builder_test.cpp
     unit/us_client_test.cpp
+    unit/us_cli_test.cpp
     unit/ws_subscriber_test.cpp
 )
 
@@ -29,6 +30,15 @@ target_link_libraries(polymarket_tests PRIVATE
 )
 
 target_compile_features(polymarket_tests PRIVATE cxx_std_23)
+
+# us_cli_test exec's the polymarket-us-cli binary via popen; pass its
+# resolved path so the test doesn't depend on cwd. Only wired when
+# apps/ is being built (the default).
+if(POLYMARKET_BUILD_APPS)
+    target_compile_definitions(polymarket_tests PRIVATE
+        POLYMARKET_US_CLI_PATH="$<TARGET_FILE:polymarket_us_cli>")
+    add_dependencies(polymarket_tests polymarket_us_cli)
+endif()
 
 # Register tests with CTest
 include(CTest)

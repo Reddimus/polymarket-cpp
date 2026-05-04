@@ -394,6 +394,12 @@ Result<std::string> Client::get_orders(const OrderFilter &filter) {
   return impl_->authed_request(http::Method::GET, path, "");
 }
 
+Result<std::string> Client::get_order_by_id(std::string_view order_id) {
+  std::string path = "/v1/order/";
+  path.append(order_id);
+  return impl_->authed_request(http::Method::GET, path, "");
+}
+
 Result<std::string> Client::get_positions() {
   return impl_->authed_request(http::Method::GET, "/v1/portfolio/positions",
                                "");

@@ -6,6 +6,36 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-04
+
+### Added
+
+- **`pm::us::Client::get_order_by_id(order_id)`** — fetch a single
+  order's status by id (`GET /v1/order/{id}`). Used by trader-side
+  reconciliation to promote `live_pending` → `live_filled` without
+  scanning the full open-orders list.
+- **`apps/polymarket-us-cli`** — new production binary that wraps
+  `pm::us::Client` behind a JSON-stdin/JSON-stdout protocol. One
+  invocation = one operation. Lets Python services like
+  polymarket-trader's LiveExecutor talk to Polymarket US without
+  re-implementing Ed25519 signing or the wire format. Commands:
+  `get_account` | `get_balance` | `place_order` | `cancel_order` |
+  `get_order` | `get_orders` | `get_positions`. Structured error
+  envelope with categories (`auth`, `bad_request`, `transport`,
+  `unknown`) so callers can decide retry-vs-not without parsing
+  free-text.
+- Tests: 9 new `us_cli` integration tests via popen — version
+  output, argument parsing, credential loading (JSON + colon
+  formats), stdin protocol enforcement, command dispatch validation
+  for each parameterized command.
+
+### Build
+
+- New `apps/` subdirectory + `POLYMARKET_BUILD_APPS` CMake option
+  (default ON). The CLI links against `nlohmann/json` v3.11.3 via
+  FetchContent; this dependency is scoped to apps/ only — the
+  library's public headers stay JSON-lib-agnostic.
+
 ## [0.1.5] - 2026-05-03
 
 ### Added
