@@ -200,6 +200,32 @@ TEST_CASE("Polymarket US place_order rejects unknown side without HTTP call",
                Catch::Matchers::ContainsSubstring("side"));
 }
 
+TEST_CASE("Polymarket US place_order accepts explicit short-side intents",
+          "[us][orders][validation]") {
+  Client client;
+  OrderRequest req;
+  req.market_id = "tc-temp-nychigh-2026-05-02-gte56lt57";
+  req.side = "buy_short";
+  req.type = "limit";
+  req.price = Decimal::from_string("0.50");
+  req.size = Decimal::from_string("10");
+
+  auto result = client.place_order(req);
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE_THAT(result.error().message(),
+               Catch::Matchers::ContainsSubstring("set_credentials"));
+  REQUIRE_THAT(result.error().message(),
+               !Catch::Matchers::ContainsSubstring("side"));
+
+  req.side = "ORDER_INTENT_SELL_SHORT";
+  result = client.place_order(req);
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE_THAT(result.error().message(),
+               Catch::Matchers::ContainsSubstring("set_credentials"));
+  REQUIRE_THAT(result.error().message(),
+               !Catch::Matchers::ContainsSubstring("side"));
+}
+
 TEST_CASE("Polymarket US place_order rejects unknown type without HTTP call",
           "[us][orders][validation]") {
   using namespace polymarket;

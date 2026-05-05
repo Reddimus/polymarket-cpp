@@ -59,7 +59,8 @@ struct OrderFilter {
 /// Order request for Polymarket US
 struct OrderRequest {
   std::string market_id;
-  std::string side; ///< "buy" or "sell"
+  /// "buy"/"buy_long", "sell"/"sell_long", "buy_short", or "sell_short"
+  std::string side;
   std::string type; ///< "limit" or "market"
   Decimal price;    ///< Price (for limit orders)
   Decimal size;     ///< Size in shares

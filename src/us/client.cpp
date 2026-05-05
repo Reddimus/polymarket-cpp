@@ -69,6 +69,24 @@ void append_query(std::string &url, std::string_view key, int value) {
   append_query(url, key, std::string_view(std::to_string(value)));
 }
 
+std::optional<std::string> order_intent_from_side(const std::string &side) {
+  if (side == "buy" || side == "buy_long" ||
+      side == "ORDER_INTENT_BUY_LONG") {
+    return "ORDER_INTENT_BUY_LONG";
+  }
+  if (side == "sell" || side == "sell_long" ||
+      side == "ORDER_INTENT_SELL_LONG") {
+    return "ORDER_INTENT_SELL_LONG";
+  }
+  if (side == "buy_short" || side == "ORDER_INTENT_BUY_SHORT") {
+    return "ORDER_INTENT_BUY_SHORT";
+  }
+  if (side == "sell_short" || side == "ORDER_INTENT_SELL_SHORT") {
+    return "ORDER_INTENT_SELL_SHORT";
+  }
+  return std::nullopt;
+}
+
 } // namespace
 
 struct Client::Impl {
@@ -328,20 +346,16 @@ Result<std::string> Client::get_health() {
 // ----- Authenticated Endpoints (api.polymarket.us) -----
 
 Result<std::string> Client::place_order(const OrderRequest &request) {
-  // Map caller-side `side` ("buy"/"sell") to the docs intent enum.
-  // Polymarket also exposes BUY_SHORT/SELL_SHORT for short positions,
-  // but that's a deliberate trader-side decision; the long-side
-  // mapping is what every spot/limit buyer needs. Reject other values
-  // explicitly so a typo can't silently degrade to a buy.
-  std::string intent;
-  if (request.side == "buy") {
-    intent = "ORDER_INTENT_BUY_LONG";
-  } else if (request.side == "sell") {
-    intent = "ORDER_INTENT_SELL_LONG";
-  } else {
+  // Map caller-side aliases to the docs intent enum. Explicit short
+  // intents are required for NO-side market exposure; reject typos so
+  // a bad signal cannot silently degrade to a long order.
+  const std::optional<std::string> intent = order_intent_from_side(request.side);
+  if (!intent.has_value()) {
     return std::unexpected(Error::validation(
-        "OrderRequest.side must be 'buy' or 'sell' (got: " + request.side +
-        ")"));
+        "OrderRequest.side must be one of 'buy', 'sell', 'buy_long', "
+        "'sell_long', 'buy_short', 'sell_short', or a supported "
+        "ORDER_INTENT_* value (got: " +
+        request.side + ")"));
   }
 
   // Map caller-side `type` ("limit"/"market") to the docs enum.
@@ -358,7 +372,7 @@ Result<std::string> Client::place_order(const OrderRequest &request) {
 
   std::ostringstream body;
   body << "{" << R"("marketSlug":")" << request.market_id << "\","
-       << R"("intent":")" << intent << R"(",)" << R"("type":")" << type_str
+       << R"("intent":")" << *intent << R"(",)" << R"("type":")" << type_str
        << R"(",)" << R"("timeInForce":"TIME_IN_FORCE_GOOD_TILL_CANCEL",)"
        << R"("quantity":")" << request.size.to_string() << "\","
        << R"("price":")" << request.price.to_string() << "\"";
