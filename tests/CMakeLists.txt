@@ -1,13 +1,20 @@
 enable_testing()
 
-# Find or fetch Catch2
+# Find or fetch Catch2. Force a STATIC build — Catch2's default is
+# SHARED on Windows, which kicks in CMake's exports.def auto-generation
+# step. That step is known to access-violate on large object lists
+# under MSVC + CMake 4 (exit code 0xC0000005); STATIC sidesteps it
+# entirely. Linux/macOS keep the same shape.
 include(FetchContent)
+set(BUILD_SHARED_LIBS_ORIG ${BUILD_SHARED_LIBS})
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     Catch2
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
     GIT_TAG v3.5.2
 )
 FetchContent_MakeAvailable(Catch2)
+set(BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS_ORIG} CACHE BOOL "" FORCE)
 
 # Unit tests
 add_executable(polymarket_tests
