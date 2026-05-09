@@ -24,8 +24,11 @@ if(POLYMARKET_USE_CPP26)
     message(STATUS "C++26 mode enabled (experimental)")
 endif()
 
-# Aggressive optimization flags for Release builds
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+# Aggressive optimization flags for Release builds. MSVC has its own
+# Release defaults; only override for GCC/Clang.
+if(NOT MSVC)
+    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+endif()
 
 # Enable LTO if requested and supported
 if(POLYMARKET_ENABLE_LTO)
@@ -39,12 +42,15 @@ if(POLYMARKET_ENABLE_LTO)
     endif()
 endif()
 
-# CPU-specific tuning (optional, not portable)
-if(POLYMARKET_NATIVE_ARCH)
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -march=native")
-    message(STATUS "Using -march=native for CPU-specific optimizations")
-else()
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -mtune=generic")
+# CPU-specific tuning. GCC/Clang only — MSVC uses /arch flags with
+# different semantics so we leave its defaults untouched.
+if(NOT MSVC)
+    if(POLYMARKET_NATIVE_ARCH)
+        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -march=native")
+        message(STATUS "Using -march=native for CPU-specific optimizations")
+    else()
+        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -mtune=generic")
+    endif()
 endif()
 
 # Find dependencies
