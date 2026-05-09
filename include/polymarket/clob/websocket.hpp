@@ -267,8 +267,12 @@ public:
   /// Check if authenticated (can use user channel)
   [[nodiscard]] bool is_authenticated() const noexcept;
 
-private:
+  /// Opaque pimpl handle. Forward-declared here (publicly) so the
+  /// libwebsockets C-style callback in websocket.cpp can take a
+  /// pointer to it; same pattern as ``polymarket::us::ws::Subscriber``.
   struct Impl;
+
+private:
   std::unique_ptr<Impl> impl_;
 };
 

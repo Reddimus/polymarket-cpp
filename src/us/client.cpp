@@ -70,8 +70,7 @@ void append_query(std::string &url, std::string_view key, int value) {
 }
 
 std::optional<std::string> order_intent_from_side(const std::string &side) {
-  if (side == "buy" || side == "buy_long" ||
-      side == "ORDER_INTENT_BUY_LONG") {
+  if (side == "buy" || side == "buy_long" || side == "ORDER_INTENT_BUY_LONG") {
     return "ORDER_INTENT_BUY_LONG";
   }
   if (side == "sell" || side == "sell_long" ||
@@ -349,7 +348,8 @@ Result<std::string> Client::place_order(const OrderRequest &request) {
   // Map caller-side aliases to the docs intent enum. Explicit short
   // intents are required for NO-side market exposure; reject typos so
   // a bad signal cannot silently degrade to a long order.
-  const std::optional<std::string> intent = order_intent_from_side(request.side);
+  const std::optional<std::string> intent =
+      order_intent_from_side(request.side);
   if (!intent.has_value()) {
     return std::unexpected(Error::validation(
         "OrderRequest.side must be one of 'buy', 'sell', 'buy_long', "
