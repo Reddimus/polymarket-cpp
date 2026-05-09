@@ -5,11 +5,44 @@
 #include "polymarket/crypto/eip712.hpp"
 
 #include <chrono>
+#include <cstdint>
 #include <random>
+
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+#endif
 
 namespace polymarket::clob {
 
 namespace {
+
+/// Compute ``(a * b) / divisor`` without overflowing the 64-bit product.
+///
+/// The pattern (shares * price_scaled) / SCALE shows up in every
+/// limit/market-order amount calculation. For typical retail orders
+/// the product fits in 64 bits, but Polymarket allows institutional
+/// sizes where ``shares`` can exceed 10^10 — at that point
+/// ``shares * price_scaled`` overflows ``uint64_t``. GCC/Clang
+/// provide ``__uint128_t`` as a built-in extension; MSVC does not,
+/// so the Windows path uses the ``_umul128`` / ``_udiv128`` x86-64
+/// intrinsics for a 128-bit-precise multiply-then-divide.
+inline std::uint64_t mul_div_u64(std::uint64_t a, std::uint64_t b,
+                                 std::uint64_t divisor) {
+#if defined(__SIZEOF_INT128__)
+  return static_cast<std::uint64_t>(
+      (static_cast<unsigned __int128>(a) * b) / divisor);
+#elif defined(_MSC_VER) && !defined(__clang__)
+  std::uint64_t hi;
+  std::uint64_t lo = _umul128(a, b, &hi);
+  if (hi == 0) {
+    return lo / divisor;
+  }
+  std::uint64_t rem;
+  return _udiv128(hi, lo, divisor, &rem);
+#else
+#error "mul_div_u64 needs __uint128_t (GCC/Clang) or _umul128 (MSVC x64)"
+#endif
+}
 
 /// Calculate amounts for limit order
 /// For CLOB:
@@ -30,7 +63,7 @@ calculate_limit_amounts(Side side, const Decimal &price, const Decimal &size) {
   uint64_t price_scaled = price.to_uint64_scaled(6); // price * 10^6
 
   // USDC amount = shares * price / 10^6
-  uint64_t usdc = (static_cast<__uint128_t>(shares) * price_scaled) / SCALE;
+  uint64_t usdc = mul_div_u64(shares, price_scaled, SCALE);
 
   if (side == Side::Buy) {
     // Maker gives USDC, taker gives shares
@@ -144,7 +177,7 @@ Result<SignableOrder> OrderBuilder<Market>::build() const {
     // Amount is in USDC
     uint64_t usdc = amount_scaled;
     // shares = usdc * SCALE / price_scaled
-    uint64_t shares = (static_cast<__uint128_t>(usdc) * SCALE) / price_scaled;
+    uint64_t shares = mul_div_u64(usdc, SCALE, price_scaled);
 
     if (*side_ == Side::Buy) {
       maker_amount = uint256_t::from_uint64(usdc);
@@ -156,7 +189,7 @@ Result<SignableOrder> OrderBuilder<Market>::build() const {
   } else {
     // Amount is in shares
     uint64_t shares = amount_scaled;
-    uint64_t usdc = (static_cast<__uint128_t>(shares) * price_scaled) / SCALE;
+    uint64_t usdc = mul_div_u64(shares, price_scaled, SCALE);
 
     if (*side_ == Side::Buy) {
       maker_amount = uint256_t::from_uint64(usdc);
