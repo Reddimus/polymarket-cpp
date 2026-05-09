@@ -193,7 +193,7 @@ Result<Response> Client::execute(const Request &request) {
   case Method::PUT:
     curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
     break;
-  case Method::DELETE:
+  case Method::DEL:
     curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELETE");
     break;
   case Method::PATCH:
@@ -325,7 +325,7 @@ Result<Response> Client::post(std::string_view url, std::string_view body) {
 
 Result<Response> Client::del(std::string_view url) {
   Request req;
-  req.method = Method::DELETE;
+  req.method = Method::DEL;
   req.url = std::string(url);
   return execute(req);
 }

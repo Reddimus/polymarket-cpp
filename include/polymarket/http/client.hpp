@@ -17,8 +17,16 @@
 
 namespace polymarket::http {
 
-/// HTTP method
-enum class Method { GET, POST, PUT, DELETE, PATCH };
+/// HTTP method.
+///
+/// Note: ``DEL`` (not ``DELETE``) is the enumerator for the wire
+/// verb ``"DELETE"``. ``<windows.h>`` defines ``DELETE`` as a macro
+/// for an access-rights constant (``0x00010000L``); any indirect
+/// inclusion via libcurl/MSVC headers makes ``Method::DELETE``
+/// expand to ``Method::0x00010000L`` and the build dies with
+/// C2589/C2059. ``method_to_string`` still emits ``"DELETE"`` so
+/// the wire protocol is unchanged.
+enum class Method { GET, POST, PUT, DEL, PATCH };
 
 /// Convert method to string
 constexpr std::string_view method_to_string(Method method) {
@@ -29,7 +37,7 @@ constexpr std::string_view method_to_string(Method method) {
     return "POST";
   case Method::PUT:
     return "PUT";
-  case Method::DELETE:
+  case Method::DEL:
     return "DELETE";
   case Method::PATCH:
     return "PATCH";
