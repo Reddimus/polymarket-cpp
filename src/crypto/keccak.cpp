@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstring>
 #include <iomanip>
 #include <sstream>
@@ -43,7 +44,19 @@ constexpr int ROTATION[5][5] = {{0, 1, 62, 28, 27},
                                 {18, 2, 61, 56, 14}};
 
 inline std::uint64_t rotl64(std::uint64_t x, int n) {
-  return (x << n) | (x >> (64 - n));
+  // C++20 ``std::rotl`` is the well-defined left-rotate. The previous
+  // hand-rolled ``(x << n) | (x >> (64 - n))`` was UB when n == 0
+  // (the right shift's count was 64, == type width). GCC/Linux-Clang
+  // happened to return 0 for that shift; Apple Clang at -O2 is
+  // documented to take advantage of the UB and produce silently
+  // incorrect output — the symptom that broke the macOS Keccak /
+  // EIP-55 / EIP-712 / Address tests in CI on macos-latest while
+  // Linux apt-clang/gcc passed all 44/44.
+  //
+  // ``ROTATION[0][0] == 0`` in keccak_f's ρ/π step path triggers
+  // the n=0 case once per Keccak round, which is enough to corrupt
+  // the digest deterministically.
+  return std::rotl(x, n);
 }
 
 void keccak_f(std::uint64_t state[25]) {

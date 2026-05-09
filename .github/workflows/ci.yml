@@ -45,18 +45,16 @@ jobs:
       - name: Build
         run: make build
 
-      # macOS test re-enable was attempted alongside the libsecp256k1
-      # migration but the failure mode is broader than ecrecover: the
-      # in-tree (pure C++23, no OpenSSL) Keccak-256 / EIP-55 / EIP-712
-      # test vectors also fail under Apple Clang on macos-latest. The
-      # in-tree implementation passes 44/44 on Ubuntu apt clang/gcc,
-      # so the divergence is somewhere in the macOS build path itself
-      # (compiler version, libc++ behavior, optimization assumptions)
-      # rather than the algorithm. Tracked as a separate follow-up;
-      # build verification still proves macOS portability of the
-      # library compile path.
+      # macOS test re-enabled after the keccak.cpp ``rotl64`` fix:
+      # the previous hand-rolled rotate had ``x >> 64`` UB when the
+      # rotation count was 0 (Keccak's ROTATION[0][0]==0 hits this
+      # once per round). GCC/Linux-Clang happened to return 0;
+      # Apple Clang at -O2 takes advantage of the UB and produced
+      # silently wrong digests — which is what broke Keccak-256 /
+      # EIP-55 / EIP-712 / Address on macos-latest while Linux
+      # passed all 44/44. Switching to C++20 ``std::rotl`` makes
+      # the behavior well-defined on every compiler.
       - name: Test
-        if: false
         run: make test
 
   build-windows:
