@@ -6,6 +6,22 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-05-10
+
+### Fixed
+
+- Renamed `FetchContent_Declare(nlohmann_json ...)` → `FetchContent_Declare(json ...)`
+  to match the convention every sibling consumer (`infra-cpp/kalshi`,
+  `open-meteo-data`, `nws-data`, `kalshi-market-data`,
+  `polymarket-trader` transitively via infra-cpp) already uses. v0.3.0
+  introduced this dep with the `nlohmann_json` name and that broke
+  `polymarket-trader`'s build with
+  `add_library cannot create target "nlohmann_json"` because two
+  different FetchContent names ("json" + "nlohmann_json") both tried
+  to create the same target. With matching names, FetchContent's
+  first-registered-wins dedupe kicks in and a single `nlohmann_json`
+  target is shared across the dep tree.
+
 ## [0.3.0] - 2026-05-10
 
 ### Added
