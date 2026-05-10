@@ -301,6 +301,7 @@ flowchart TD
 | | Trades | ✅ |
 | | Balance/Allowance | ✅ |
 | | API Key Management | ✅ |
+| | WebSocket (market + user channels) | ✅ |
 | **Gamma** | Events | ⏳ Stub |
 | | Markets | ⏳ Stub |
 | | Series | ⏳ Stub |
@@ -309,7 +310,7 @@ flowchart TD
 | **US (v0.1.0)** | Health, Tags, Markets, Orderbook, Settlement, Candles | ✅ |
 | | Account Balance, Positions, Activities | ✅ |
 | | Orders (single + batched + cancel + modify) | ✅ |
-| | WebSocket subscriber | ⏳ Stub |
+| | WebSocket subscriber | ✅ |
 
 ## Directory Structure
 

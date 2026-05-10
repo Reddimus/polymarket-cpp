@@ -25,6 +25,7 @@ add_executable(polymarket_tests
     unit/us_client_test.cpp
     unit/us_cli_test.cpp
     unit/ws_subscriber_test.cpp
+    unit/clob_websocket_test.cpp
 )
 
 target_link_libraries(polymarket_tests PRIVATE

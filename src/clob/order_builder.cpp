@@ -29,8 +29,8 @@ namespace {
 inline std::uint64_t mul_div_u64(std::uint64_t a, std::uint64_t b,
                                  std::uint64_t divisor) {
 #if defined(__SIZEOF_INT128__)
-  return static_cast<std::uint64_t>(
-      (static_cast<unsigned __int128>(a) * b) / divisor);
+  return static_cast<std::uint64_t>((static_cast<unsigned __int128>(a) * b) /
+                                    divisor);
 #elif defined(_MSC_VER) && !defined(__clang__)
   std::uint64_t hi;
   std::uint64_t lo = _umul128(a, b, &hi);

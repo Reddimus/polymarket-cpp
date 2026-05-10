@@ -484,6 +484,11 @@ WebSocketClient &
 WebSocketClient::operator=(WebSocketClient &&) noexcept = default;
 
 VoidResult WebSocketClient::connect() {
+  // A moved-from instance has impl_ == nullptr. Surface a clean error
+  // rather than dereferencing through nullptr a few lines below.
+  if (!impl_) {
+    return std::unexpected(Error::network("client moved-from"));
+  }
   // Idempotent: tear down any existing context before standing a new
   // one up.
   disconnect();
@@ -689,15 +694,30 @@ void WebSocketClient::on_state_change(WsStateCallback callback) {
 }
 
 const WsConfig &WebSocketClient::config() const noexcept {
+  // The defaulted move ctor leaves the moved-from object's impl_ as
+  // nullptr; returning a reference into the null would crash. Surface
+  // a static empty config so accessors stay safe on moved-from
+  // instances (matches the null-guard pattern in disconnect() /
+  // is_connected()).
+  if (!impl_) {
+    static const WsConfig kEmpty{};
+    return kEmpty;
+  }
   return impl_->config;
 }
 
 std::size_t WebSocketClient::subscription_count() const noexcept {
+  if (!impl_) {
+    return 0;
+  }
   std::lock_guard<std::mutex> g(impl_->sub_mutex);
   return impl_->active_subs.size();
 }
 
 bool WebSocketClient::is_authenticated() const noexcept {
+  if (!impl_) {
+    return false;
+  }
   return impl_->credentials.has_value();
 }
 

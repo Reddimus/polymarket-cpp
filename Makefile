@@ -71,10 +71,11 @@ define run_example
 endef
 
 # Run examples — keep this list aligned with examples/CMakeLists.txt.
-# The websocket example is intentionally absent: src/clob/websocket.cpp
-# is a Phase-10 stub (see CHANGELOG "Stubs (TODO: implement)"), so a
-# WebSocket example would have nothing to demonstrate. Reinstate
-# run-websocket once the WS implementation lands.
+# A WebSocket example isn't bundled yet even though src/clob/websocket.cpp
+# is a functional libwebsockets impl (704 LoC, market + user channels):
+# wiring an interactive run-target needs a credentials path that doesn't
+# trip the lint suite. Add ``run-websocket`` when an example/websocket.cpp
+# lands. Tests at tests/unit cover the lifecycle/validation contract.
 run-market_data: build
 	$(call run_example,./$(BUILD_DIR)/examples/example_market_data)
 
