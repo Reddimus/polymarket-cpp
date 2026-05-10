@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(polymarket-cpp VERSION 0.3.0 LANGUAGES CXX)
+project(polymarket-cpp VERSION 0.3.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -89,12 +89,17 @@ FetchContent_MakeAvailable(secp256k1)
 # dispatcher. Promoting it from a tests-only transitive (it ships
 # inside cpp-httplib's deps) to a first-class dep so production
 # code can include it safely without depending on the test build.
-FetchContent_Declare(nlohmann_json
+# FetchContent name is "json" (not "nlohmann_json") so it matches the
+# convention every sibling consumer (infra-cpp/kalshi, open-meteo-data,
+# nws-data, kalshi-market-data, polymarket-trader's transitive
+# infra-cpp) uses; first-registered-wins dedupe then keeps a single
+# `nlohmann_json` target across the dep tree.
+FetchContent_Declare(json
     GIT_REPOSITORY https://github.com/nlohmann/json.git
     GIT_TAG        v3.11.3
     GIT_SHALLOW    TRUE
 )
-FetchContent_MakeAvailable(nlohmann_json)
+FetchContent_MakeAvailable(json)
 
 # Include directories
 include_directories(${CMAKE_SOURCE_DIR}/include)
