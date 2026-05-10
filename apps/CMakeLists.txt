@@ -5,19 +5,10 @@
 # subprocess wrapper). Examples remain operator-facing scripts; apps
 # are part of the platform's runtime surface.
 
-include(FetchContent)
-
-# nlohmann/json — JSON parse/build for the CLI's stdin/stdout
-# protocol. Scoped to apps/ only; not added to the library's public
-# dependencies. cpp17-compatible single header; downloaded once via
-# FetchContent so we don't take a system dep.
-FetchContent_Declare(nlohmann_json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG v3.11.3
-    GIT_SHALLOW TRUE)
-set(JSON_BuildTests OFF CACHE INTERNAL "")
-set(JSON_Install OFF CACHE INTERNAL "")
-FetchContent_MakeAvailable(nlohmann_json)
+# nlohmann/json — provided by the root CMakeLists.txt FetchContent
+# (target `nlohmann_json::nlohmann_json` is global). v0.3.1 collapsed
+# the previous apps-only FetchContent_Declare to avoid a duplicate
+# `nlohmann_json` target collision now that the root scope owns it.
 
 add_executable(polymarket_us_cli polymarket_us_cli.cpp)
 target_link_libraries(polymarket_us_cli
