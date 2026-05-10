@@ -1,8 +1,8 @@
 # Security Policy
 
 `polymarket-cpp` is a third-party C++ client for the offshore Polymarket
-CLOB plus the CFTC-regulated Polymarket US gateway. It performs Ed25519
-+ secp256k1 + EIP-712 signing and holds private keys in process memory,
+CLOB plus the CFTC-regulated Polymarket US gateway. It performs Ed25519,
+secp256k1, and EIP-712 signing and holds private keys in process memory,
 so a vulnerability in the crypto path or in credential handling could
 put live trading capital at risk. This file is the canonical contact
 path for reporting one.
