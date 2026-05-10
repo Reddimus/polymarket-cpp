@@ -24,8 +24,11 @@ if(POLYMARKET_USE_CPP26)
     message(STATUS "C++26 mode enabled (experimental)")
 endif()
 
-# Aggressive optimization flags for Release builds
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+# Aggressive optimization flags for Release builds. MSVC has its own
+# Release defaults; only override for GCC/Clang.
+if(NOT MSVC)
+    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+endif()
 
 # Enable LTO if requested and supported
 if(POLYMARKET_ENABLE_LTO)
@@ -39,19 +42,59 @@ if(POLYMARKET_ENABLE_LTO)
     endif()
 endif()
 
-# CPU-specific tuning (optional, not portable)
-if(POLYMARKET_NATIVE_ARCH)
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -march=native")
-    message(STATUS "Using -march=native for CPU-specific optimizations")
-else()
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -mtune=generic")
+# CPU-specific tuning. GCC/Clang only — MSVC uses /arch flags with
+# different semantics so we leave its defaults untouched.
+if(NOT MSVC)
+    if(POLYMARKET_NATIVE_ARCH)
+        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -march=native")
+        message(STATUS "Using -march=native for CPU-specific optimizations")
+    else()
+        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -mtune=generic")
+    endif()
 endif()
 
 # Find dependencies
 find_package(OpenSSL REQUIRED)
 find_package(CURL REQUIRED)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(WEBSOCKETS REQUIRED IMPORTED_TARGET libwebsockets)
+if(NOT WIN32)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(WEBSOCKETS REQUIRED IMPORTED_TARGET libwebsockets)
+else()
+    # Windows: libwebsockets shipped via vcpkg config-mode
+    find_package(libwebsockets CONFIG REQUIRED)
+endif()
+
+# libsecp256k1 — Bitcoin Core's reference implementation. Provides the
+# only correct ECDSA public-key recovery primitive on this stack
+# (OpenSSL has none). Fetched at configure time so consumers don't
+# need a system package; recovery + extrakeys modules enabled so
+# both sign-recoverable and ecrecover paths are available.
+include(FetchContent)
+set(SECP256K1_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_BENCHMARK OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_EXHAUSTIVE_TESTS OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_CTIME_TESTS OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(SECP256K1_ENABLE_MODULE_RECOVERY ON CACHE BOOL "" FORCE)
+set(SECP256K1_INSTALL OFF CACHE BOOL "" FORCE)
+set(SECP256K1_DISABLE_SHARED ON CACHE BOOL "" FORCE)
+FetchContent_Declare(secp256k1
+    GIT_REPOSITORY https://github.com/bitcoin-core/secp256k1.git
+    GIT_TAG        v0.6.0
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(secp256k1)
+
+# nlohmann/json — header-only. Used by the CLOB WebSocket message
+# dispatcher. Promoting it from a tests-only transitive (it ships
+# inside cpp-httplib's deps) to a first-class dep so production
+# code can include it safely without depending on the test build.
+FetchContent_Declare(nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(nlohmann_json)
 
 # Include directories
 include_directories(${CMAKE_SOURCE_DIR}/include)
@@ -75,15 +118,17 @@ endif()
 # Install targets
 set(POLYMARKET_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/polymarket")
 
-install(TARGETS 
-    polymarket_core 
+install(TARGETS
+    polymarket_core
     polymarket_http
-    polymarket_crypto 
-    polymarket_clob 
-    polymarket_gamma 
-    polymarket_data 
-    polymarket_us 
+    polymarket_crypto
+    polymarket_clob
+    polymarket_gamma
+    polymarket_data
+    polymarket_us
     polymarket
+    secp256k1
+    nlohmann_json
     EXPORT polymarketTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

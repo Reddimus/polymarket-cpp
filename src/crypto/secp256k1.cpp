@@ -1,20 +1,57 @@
 /// @file secp256k1.cpp
-/// @brief secp256k1 ECDSA signing implementation using OpenSSL
+/// @brief secp256k1 ECDSA signing implementation
+///
+/// Key derivation + public-key serialization use OpenSSL (we already
+/// link it for HMAC + Ed25519). The signing and recovery paths use
+/// libsecp256k1 — Bitcoin Core's reference implementation — because:
+///
+///   1. OpenSSL ECDSA does not produce a recovery id, so the previous
+///      implementation tried to guess v from a parity heuristic
+///      (``r[31] ^ message_hash[0] & 1``). That guess is wrong ~50%
+///      of the time and made ecrecover() unreliable. libsecp256k1's
+///      ``secp256k1_ecdsa_sign_recoverable`` returns the correct
+///      recid alongside the signature.
+///
+///   2. OpenSSL has no public-key recovery primitive at all, so
+///      ``recover_address`` could only return an error. libsecp256k1's
+///      ``secp256k1_ecdsa_recover`` is the canonical primitive used by
+///      every Ethereum implementation.
 
 #include "polymarket/crypto/secp256k1.hpp"
 
 #include <openssl/bn.h>
 #include <openssl/ec.h>
-#include <openssl/ecdsa.h>
 #include <openssl/evp.h>
 #include <openssl/obj_mac.h>
+
+#include <secp256k1.h>
+#include <secp256k1_recovery.h>
 
 #include <algorithm>
 #include <cstring>
 #include <iomanip>
+#include <mutex>
 #include <sstream>
 
 namespace polymarket::crypto {
+
+namespace {
+
+/// Process-wide signing/verification context. Building one is
+/// somewhat expensive (table precomputation); the secp256k1 maintainers
+/// recommend reusing a single context for the lifetime of the process.
+/// Thread-safe for use after construction; randomization is optional
+/// per the upstream API contract for ``SECP256K1_CONTEXT_SIGN`` |
+/// ``SECP256K1_CONTEXT_VERIFY``.
+secp256k1_context *secp_ctx() {
+  static secp256k1_context *ctx = []() {
+    return secp256k1_context_create(SECP256K1_CONTEXT_SIGN |
+                                    SECP256K1_CONTEXT_VERIFY);
+  }();
+  return ctx;
+}
+
+} // namespace
 
 // =========================================================================
 // Signature Implementation
@@ -261,81 +298,41 @@ Result<Signature> PrivateKey::sign(const Keccak256Hash &message_hash) const {
     return std::unexpected(Error::crypto("Private key not initialized"));
   }
 
-  const EC_KEY *ec_key = EVP_PKEY_get0_EC_KEY(impl_->key);
-  if (!ec_key) {
-    return std::unexpected(Error::crypto("Failed to get EC_KEY"));
+  // Sign with libsecp256k1 — returns (r, s) plus a recid in {0, 1}
+  // that is provably correct (matches the y-parity of the ephemeral
+  // point). RFC6979 deterministic-k is the default nonce function;
+  // signing the same hash with the same key always produces the
+  // same signature (good for reproducibility tests).
+  secp256k1_ecdsa_recoverable_signature recoverable;
+  if (secp256k1_ecdsa_sign_recoverable(
+          secp_ctx(), &recoverable, message_hash.data(), impl_->raw_key.data(),
+          /* noncefp */ nullptr,
+          /* ndata   */ nullptr) != 1) {
+    return std::unexpected(
+        Error::crypto("secp256k1_ecdsa_sign_recoverable failed"));
   }
 
-  // Sign the message hash
-  ECDSA_SIG *sig = ECDSA_do_sign(message_hash.data(), message_hash.size(),
-                                 const_cast<EC_KEY *>(ec_key));
-  if (!sig) {
-    return std::unexpected(Error::crypto("ECDSA signing failed"));
+  std::array<std::uint8_t, 64> compact{};
+  int recid = -1;
+  if (secp256k1_ecdsa_recoverable_signature_serialize_compact(
+          secp_ctx(), compact.data(), &recid, &recoverable) != 1) {
+    return std::unexpected(
+        Error::crypto("Failed to serialize recoverable signature"));
   }
-
-  // Extract r and s
-  const BIGNUM *r_bn = nullptr;
-  const BIGNUM *s_bn = nullptr;
-  ECDSA_SIG_get0(sig, &r_bn, &s_bn);
+  if (recid != 0 && recid != 1) {
+    // libsecp256k1 only ever returns 0 or 1 for the low-s normalized
+    // path used here, but be defensive: a recid of 2 or 3 would
+    // require x-coordinate overflow (vanishingly rare) and Ethereum's
+    // ecrecover doesn't accept it.
+    return std::unexpected(Error::crypto("Unsupported recid"));
+  }
 
   Signature result;
-
-  // Convert r to bytes (pad to 32 bytes)
-  int r_len = BN_num_bytes(r_bn);
-  if (r_len > 32) {
-    ECDSA_SIG_free(sig);
-    return std::unexpected(Error::crypto("Signature r too large"));
-  }
-  std::fill(result.r.begin(), result.r.end(), 0);
-  BN_bn2bin(r_bn, result.r.data() + (32 - r_len));
-
-  // Convert s to bytes (pad to 32 bytes)
-  // For Ethereum compatibility, ensure s is in the lower half of the curve
-  // order (s <= n/2, where n is the secp256k1 curve order)
-  int s_len = BN_num_bytes(s_bn);
-  if (s_len > 32) {
-    ECDSA_SIG_free(sig);
-    return std::unexpected(Error::crypto("Signature s too large"));
-  }
-  std::fill(result.s.begin(), result.s.end(), 0);
-  BN_bn2bin(s_bn, result.s.data() + (32 - s_len));
-
-  ECDSA_SIG_free(sig);
-
-  // Calculate recovery ID (v value)
-  // For Ethereum, v = 27 or 28 (pre-EIP-155)
-  // We need to determine which recovery ID allows recovery of the correct
-  // public key
-  //
-  // The recovery ID is based on:
-  // - Whether the y-coordinate of the point R = (r, y) is even or odd
-  // - Whether r < n (the curve order), which is almost always true for
-  // secp256k1
-  //
-  // For simplicity and since we have our public key, we can try both v=27 and
-  // v=28 and verify which one would recover to our public key by checking the
-  // signature.
-
-  // Get our public key for comparison
-  auto pubkey_result = public_key();
-  if (!pubkey_result) {
-    return std::unexpected(pubkey_result.error());
-  }
-  const auto &pubkey = *pubkey_result;
-
-  // For secp256k1, the recovery ID is typically determined by the y-coordinate
-  // parity of the ephemeral public key R. Since we don't have direct access to
-  // R, we use a heuristic: try v=27 first (even y), then v=28 (odd y).
-  //
-  // In practice, both should work for signature verification, but for Ethereum
-  // compatibility we need the correct one for ecrecover().
-
-  // Use the parity of r[31] XOR hash[0] as a heuristic for the recovery ID
-  // This is a simplified approach - proper implementation would compute R
-  // directly
-  std::uint8_t recid_hint = (result.r[31] ^ message_hash[0]) & 1;
-  result.v = 27 + recid_hint;
-
+  std::copy_n(compact.begin(), 32, result.r.begin());
+  std::copy_n(compact.begin() + 32, 32, result.s.begin());
+  // Pre-EIP-155 mapping: v = 27 + recid. Polymarket EIP-712 signatures
+  // and the rest of the SDK (clob/order_builder.cpp) consume this form.
+  result.v = static_cast<std::uint8_t>(27 + recid);
   return result;
 }
 
@@ -363,62 +360,49 @@ Result<bool> verify_signature(const Keccak256Hash &message_hash,
 Result<Address> recover_address(const Keccak256Hash &message_hash,
                                 const Signature &signature) {
 
-  // Get recovery ID from v
-  int recid = signature.v;
+  // Pre-EIP-155 v ∈ {27, 28}. EIP-155 packs chain_id but Polymarket's
+  // EIP-712 typed-data signatures use the legacy form throughout, so
+  // anything outside {27, 28} is malformed for this code path.
+  int recid = static_cast<int>(signature.v);
   if (recid >= 27) {
     recid -= 27;
   }
-  if (recid < 0 || recid > 3) {
+  if (recid != 0 && recid != 1) {
     return std::unexpected(Error::crypto("Invalid recovery ID"));
   }
 
-  // Create EC_GROUP for secp256k1
-  EC_GROUP *group = EC_GROUP_new_by_curve_name(NID_secp256k1);
-  if (!group) {
-    return std::unexpected(Error::crypto("Failed to create secp256k1 group"));
+  // Reassemble the recoverable signature from (r, s, recid).
+  std::array<std::uint8_t, 64> compact{};
+  std::copy(signature.r.begin(), signature.r.end(), compact.begin());
+  std::copy(signature.s.begin(), signature.s.end(), compact.begin() + 32);
+
+  secp256k1_ecdsa_recoverable_signature recoverable;
+  if (secp256k1_ecdsa_recoverable_signature_parse_compact(
+          secp_ctx(), &recoverable, compact.data(), recid) != 1) {
+    return std::unexpected(
+        Error::crypto("Failed to parse recoverable signature"));
   }
 
-  // Create ECDSA_SIG from r and s
-  ECDSA_SIG *sig = ECDSA_SIG_new();
-  if (!sig) {
-    EC_GROUP_free(group);
-    return std::unexpected(Error::crypto("Failed to create ECDSA_SIG"));
+  secp256k1_pubkey pubkey;
+  if (secp256k1_ecdsa_recover(secp_ctx(), &pubkey, &recoverable,
+                              message_hash.data()) != 1) {
+    return std::unexpected(Error::crypto("secp256k1_ecdsa_recover failed"));
   }
 
-  BIGNUM *r_bn = BN_bin2bn(signature.r.data(), 32, nullptr);
-  BIGNUM *s_bn = BN_bin2bn(signature.s.data(), 32, nullptr);
-  if (!r_bn || !s_bn || ECDSA_SIG_set0(sig, r_bn, s_bn) != 1) {
-    BN_free(r_bn);
-    BN_free(s_bn);
-    ECDSA_SIG_free(sig);
-    EC_GROUP_free(group);
-    return std::unexpected(Error::crypto("Failed to set signature components"));
+  // Serialize uncompressed (0x04 + 64 bytes); address_from_pubkey
+  // accepts either the leading-0x04 form or the bare 64-byte form
+  // (it strips the prefix internally).
+  std::array<std::uint8_t, 65> serialized{};
+  std::size_t serialized_len = serialized.size();
+  if (secp256k1_ec_pubkey_serialize(secp_ctx(), serialized.data(),
+                                    &serialized_len, &pubkey,
+                                    SECP256K1_EC_UNCOMPRESSED) != 1 ||
+      serialized_len != 65) {
+    return std::unexpected(
+        Error::crypto("Failed to serialize recovered pubkey"));
   }
 
-  // Recover public key
-  // This is a simplified implementation - for production, use a proper recovery
-  // algorithm
-  EC_KEY *ec_key = EC_KEY_new_by_curve_name(NID_secp256k1);
-  if (!ec_key) {
-    ECDSA_SIG_free(sig);
-    EC_GROUP_free(group);
-    return std::unexpected(Error::crypto("Failed to create EC_KEY"));
-  }
-
-  // Use OpenSSL's recovery if available, otherwise return error
-  // Note: OpenSSL doesn't have a direct recovery function, so we'd need to
-  // implement it For now, we'll return an error indicating this needs
-  // implementation
-
-  EC_KEY_free(ec_key);
-  ECDSA_SIG_free(sig);
-  EC_GROUP_free(group);
-
-  // TODO: Implement proper ECDSA public key recovery
-  // For now, return an error - in production, use libsecp256k1 for recovery
-  return std::unexpected(
-      Error::crypto("Public key recovery not fully implemented - use sign() "
-                    "which calculates v correctly"));
+  return address_from_pubkey(serialized);
 }
 
 } // namespace polymarket::crypto

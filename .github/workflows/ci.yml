@@ -45,15 +45,46 @@ jobs:
       - name: Build
         run: make build
 
-      # Test step intentionally disabled on macOS pending investigation
-      # of crypto-test failures (Keccak-256 vectors, secp256k1 signing,
-      # EIP-55 checksum, EIP-712 domain separator) observed on
-      # macos-latest runners but not Linux. Likely upstream OpenSSL
-      # version drift between brew and apt — separate from the CI
-      # bring-up. Build verification still covers macOS portability.
+      # macOS test re-enabled after the keccak.cpp ``rotl64`` fix:
+      # the previous hand-rolled rotate had ``x >> 64`` UB when the
+      # rotation count was 0 (Keccak's ROTATION[0][0]==0 hits this
+      # once per round). GCC/Linux-Clang happened to return 0;
+      # Apple Clang at -O2 takes advantage of the UB and produced
+      # silently wrong digests — which is what broke Keccak-256 /
+      # EIP-55 / EIP-712 / Address on macos-latest while Linux
+      # passed all 44/44. Switching to C++20 ``std::rotl`` makes
+      # the behavior well-defined on every compiler.
       - name: Test
-        if: false
         run: make test
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies (vcpkg)
+        # GitHub-hosted Windows runners ship vcpkg pre-installed at
+        # $env:VCPKG_INSTALLATION_ROOT. libsecp256k1 + nlohmann_json
+        # are vendored via FetchContent in CMake, so vcpkg only needs
+        # to provide the system deps.
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install `
+            openssl:x64-windows curl:x64-windows libwebsockets:x64-windows
+          "VCPKG_TARGET_TRIPLET=x64-windows" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_TOOLCHAIN_FILE=$env:CMAKE_TOOLCHAIN_FILE" `
+            "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TARGET_TRIPLET"
+          cmake --build build --config Release -j
+
+      - name: Test
+        shell: pwsh
+        run: ctest --test-dir build --output-on-failure -C Release
 
   markdown-lint:
     runs-on: ubuntu-latest

@@ -119,6 +119,58 @@ TEST_CASE("secp256k1 signing", "[crypto][secp256k1]") {
     std::string hex = sig->to_hex();
     REQUIRE(hex.size() == 132); // "0x" + 65 bytes = 2 + 130 hex chars
   }
+
+  SECTION("ecrecover round-trip recovers signing address") {
+    // Round-trip property test: for any message hash, recovering the
+    // address from the produced (r, s, v) must equal the signer's
+    // own address. Run across multiple hashes to catch the prior
+    // y-parity heuristic regression (which was wrong ~50% of the
+    // time and silent — sign returned a v that ecrecover wouldn't
+    // reverse).
+    auto signer_addr = key->address();
+    REQUIRE(signer_addr.has_value());
+
+    for (std::uint8_t fill : {0x00, 0x01, 0x42, 0x7f, 0x80, 0xfe, 0xff}) {
+      Keccak256Hash hash;
+      std::fill(hash.begin(), hash.end(), fill);
+
+      auto sig = key->sign(hash);
+      REQUIRE(sig.has_value());
+      REQUIRE((sig->v == 27 || sig->v == 28));
+
+      auto recovered = recover_address(hash, *sig);
+      REQUIRE(recovered.has_value());
+      REQUIRE(*recovered == *signer_addr);
+
+      auto verified = verify_signature(hash, *sig, *signer_addr);
+      REQUIRE(verified.has_value());
+      REQUIRE(*verified);
+    }
+  }
+
+  SECTION("ecrecover rejects tampered signature") {
+    Keccak256Hash hash;
+    std::fill(hash.begin(), hash.end(), 0xaa);
+
+    auto sig = key->sign(hash);
+    REQUIRE(sig.has_value());
+
+    auto signer_addr = key->address();
+    REQUIRE(signer_addr.has_value());
+
+    // Flip one byte of the signature; the recovered address should no
+    // longer match the signer.
+    Signature tampered = *sig;
+    tampered.r[0] ^= 0x01;
+
+    auto verified = verify_signature(hash, tampered, *signer_addr);
+    // Either recovery succeeds with the wrong address, or it fails
+    // outright; both are acceptable as long as we don't claim the
+    // signature was valid.
+    if (verified.has_value()) {
+      REQUIRE_FALSE(*verified);
+    }
+  }
 }
 
 TEST_CASE("HMAC-SHA256", "[crypto][hmac]") {

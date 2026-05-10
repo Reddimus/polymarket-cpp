@@ -6,6 +6,45 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`pm::clob::WebSocketClient`** — functional libwebsockets implementation
+  for the offshore CLOB streaming API. Replaces the previous Phase-10 stub.
+  Covers both the public market channel (orderbook snapshot/delta, price
+  change, last-trade-price, tick-size change, plus the optional custom
+  features `best_bid_ask`, `new_market`, `market_resolved`) and the
+  authenticated user channel (`order_fill`, `order_cancel`,
+  `trade_confirm`). Uses the same pimpl + move-safe lifecycle pattern as
+  `pm::us::ws::Subscriber`. Auto-reconnect, configurable ping interval,
+  and a typed `WsMessage` variant for callback dispatch.
+- **`pm::crypto::secp256k1::recover_pubkey_from_signature`** — full ECDSA
+  public-key recovery via Bitcoin Core's libsecp256k1 (vendored through
+  `FetchContent` against the upstream `v0.6.0` tag). Replaces the
+  `Error::crypto("not implemented")` stub. OpenSSL has no recovery
+  primitive, which is why this needed a separate dep. Round-trip
+  unit test pins sign → recover → pubkey-equality.
+- Cross-platform CI: Windows `build-windows` job added on every SDK in
+  the family, and macOS Test step re-enabled now that the Apple Clang
+  Keccak `rotl64` UB on `n=0` (root cause of the long-standing macOS
+  divergence) is fixed.
+
+### Fixed
+
+- **Apple Clang Keccak digest divergence on macOS** — hand-rolled
+  `rotl64` was `(x << n) | (x >> (64 - n))`, which is undefined behavior
+  when `n == 0` (Keccak's `ROTATION[0][0] == 0` hits this once per
+  round). GCC and Linux Clang happened to fold the UB to `0`; Apple
+  Clang at `-O2` exploited the UB and produced silently wrong digests,
+  breaking Keccak-256 / EIP-55 / EIP-712 / Address tests. Switched to
+  C++20 `std::rotl`, which is well-defined on every compiler.
+- Windows portability: `Method::DELETE` collided with the
+  `<windows.h>` `DELETE` macro; renamed to `Method::DEL`.
+  Replaced `__uint128_t` with a portable `mul_div_u64` helper that
+  uses `_umul128` / `_udiv128` intrinsics on MSVC. `gmtime_r` →
+  `gmtime_s` branch on `_WIN32`. `popen`/`pclose` aliased to
+  `_popen`/`_pclose` for the `us_cli_test`. Catch2 forced to STATIC
+  to dodge MSVC SHARED-build DLL-export crashes.
+
 ## [0.2.0] - 2026-05-04
 
 ### Added

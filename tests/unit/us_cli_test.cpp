@@ -21,8 +21,22 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+
+// POSIX uses ``popen``/``pclose`` and ``WEXITSTATUS`` from <sys/wait.h>.
+// MSVC ships the same primitives renamed to ``_popen``/``_pclose``;
+// the integer return from ``_pclose`` is already the exit code (no
+// WEXITSTATUS wrapper needed). ``getpid`` lives in <process.h> on
+// Windows but ``::getpid`` is also a Windows ``CRT`` alias for
+// ``_getpid`` if we include <process.h>. Aliases below normalise both.
+#if defined(_WIN32)
+#include <process.h>
+#define popen _popen
+#define pclose _pclose
+#define WEXITSTATUS(x) (x)
+#else
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 
 namespace {
 
@@ -49,8 +63,16 @@ CliRun run_cli(const std::string &args, const std::string &stdin_text) {
     std::ofstream f(stdin_path);
     f << stdin_text;
   }
+  // POSIX shell uses ``/dev/null``; Windows ``cmd.exe`` uses ``nul``.
+  // ``_popen`` on Windows runs the command via cmd, so the right
+  // null device differs by platform.
+#if defined(_WIN32)
+  constexpr const char *kNullDevice = "nul";
+#else
+  constexpr const char *kNullDevice = "/dev/null";
+#endif
   std::string cmd = std::string(kCliPath) + " " + args + " < " +
-                    stdin_path.string() + " 2>/dev/null";
+                    stdin_path.string() + " 2>" + kNullDevice;
   FILE *p = ::popen(cmd.c_str(), "r");
   REQUIRE(p != nullptr);
   std::ostringstream out;

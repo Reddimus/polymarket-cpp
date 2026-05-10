@@ -28,6 +28,12 @@ add_library(polymarket_crypto STATIC
     crypto/ed25519.cpp
 )
 target_link_libraries(polymarket_crypto PUBLIC polymarket_core OpenSSL::SSL OpenSSL::Crypto)
+# secp256k1 is referenced only in src/crypto/secp256k1.cpp. Wrapping
+# the link in $<LINK_ONLY:...> tells CMake the dependency is purely a
+# link-time concern, so it's stripped from INTERFACE_LINK_LIBRARIES on
+# install/export. Static archives carry the resolved symbols, so
+# downstream consumers neither see nor need the secp256k1 target.
+target_link_libraries(polymarket_crypto PUBLIC $<LINK_ONLY:secp256k1>)
 target_include_directories(polymarket_crypto PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
@@ -39,13 +45,23 @@ add_library(polymarket_clob STATIC
     clob/order_builder.cpp
     clob/websocket.cpp
 )
-target_link_libraries(polymarket_clob PUBLIC 
-    polymarket_core 
-    polymarket_crypto 
+if(NOT WIN32)
+    set(_POLYMARKET_WS_TARGET PkgConfig::WEBSOCKETS)
+else()
+    set(_POLYMARKET_WS_TARGET websockets_shared)
+endif()
+
+target_link_libraries(polymarket_clob PUBLIC
+    polymarket_core
+    polymarket_crypto
     polymarket_http
-    CURL::libcurl 
-    PkgConfig::WEBSOCKETS
+    CURL::libcurl
+    ${_POLYMARKET_WS_TARGET}
 )
+# nlohmann/json is INTERFACE (header-only). Header inclusion path is
+# what matters; we expose it PRIVATE-ly because no public polymarket
+# header transitively includes it.
+target_link_libraries(polymarket_clob PRIVATE nlohmann_json::nlohmann_json)
 target_include_directories(polymarket_clob PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
@@ -76,12 +92,12 @@ add_library(polymarket_us STATIC
     us/client.cpp
     us/ws/subscriber.cpp
 )
-target_link_libraries(polymarket_us PUBLIC 
-    polymarket_core 
-    polymarket_crypto 
+target_link_libraries(polymarket_us PUBLIC
+    polymarket_core
+    polymarket_crypto
     polymarket_http
-    CURL::libcurl 
-    PkgConfig::WEBSOCKETS
+    CURL::libcurl
+    ${_POLYMARKET_WS_TARGET}
 )
 target_include_directories(polymarket_us PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
