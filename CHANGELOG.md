@@ -6,6 +6,8 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-12
+
 ### Changed
 
 - **JSON library**: migrated from nlohmann/json v3.11.3 to
@@ -303,6 +305,14 @@ Stubs (TODO: implement):
 - WebSocket subscriptions / order-history streaming
 - ECDSA public-key recovery in secp256k1 (signing works; recovery TODO)
 
-[Unreleased]: https://github.com/Reddimus/polymarket-cpp/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Reddimus/polymarket-cpp/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Reddimus/polymarket-cpp/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/Reddimus/polymarket-cpp/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/Reddimus/polymarket-cpp/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/Reddimus/polymarket-cpp/compare/v0.1.5...v0.2.0
+[0.1.5]: https://github.com/Reddimus/polymarket-cpp/compare/v0.1.4...v0.1.5
+[0.1.4]: https://github.com/Reddimus/polymarket-cpp/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/Reddimus/polymarket-cpp/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/Reddimus/polymarket-cpp/releases/tag/v0.1.2
 [0.1.1]: https://github.com/Reddimus/polymarket-cpp/releases/tag/v0.1.1
 [0.1.0]: https://github.com/Reddimus/polymarket-cpp/releases/tag/v0.1.0
