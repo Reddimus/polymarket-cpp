@@ -20,7 +20,10 @@
 /// The variant-based message dispatch handles the most common
 /// ``event_type`` values; an unknown type is logged via the error
 /// callback but does not tear down the connection. Parsing uses
-/// nlohmann::json (already vendored via FetchContent for tests).
+/// Glaze's `glz::generic` AST: the message shape is dynamic-per-type
+/// (different ``event_type`` values yield different field sets), so we
+/// parse once into the generic AST and walk it. Migrated from
+/// nlohmann/json on 2026-05-11.
 
 #include "polymarket/clob/websocket.hpp"
 
@@ -36,10 +39,11 @@ using polymarket::crypto::generate_l2_signature;
 #include <chrono>
 #include <cstring>
 #include <deque>
+#include <glaze/glaze.hpp>
+#include <glaze/json/generic.hpp>
 #include <iostream>
 #include <libwebsockets.h>
 #include <mutex>
-#include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -49,7 +53,7 @@ namespace polymarket::clob {
 
 namespace {
 
-using nlohmann::json;
+using glz_node = glz::generic;
 
 constexpr std::size_t kMaxFrameSize = 1 << 20; // 1 MiB
 constexpr const char *kClobProtocolName = "polymarket-clob-ws";
@@ -99,71 +103,115 @@ ParsedUrl parse_url(std::string_view url) {
   return r;
 }
 
-/// Parse one inbound JSON message into a typed ``WsMessage`` variant.
-/// Returns ``std::nullopt`` for unknown ``event_type`` values; the
-/// caller logs and drops. All getters use ``.value(k, default)`` so
-/// missing optional fields produce a well-typed default rather than
-/// throwing.
-std::optional<WsMessage> parse_message(const json &j) {
-  const std::string ev = j.value("event_type", std::string{});
+// ---- glz::generic access helpers ----
+//
+// All field reads go through these so a missing or wrong-typed field
+// produces a typed default rather than a throwing access. The bool
+// overload below is named ``get_bool_field`` (NOT another overload of
+// ``get_*``) to avoid the bool/string_view overload-set ambiguity that
+// bit the US client's ``append_query`` in v0.1.0 (see memory
+// ``feedback_polymarket_cpp_overload_bug.md``). The dispatcher's
+// inputs are always typed JSON, not raw literals, so the risk is
+// lower here — but we keep the names distinct to be safe.
 
-  auto get_decimal = [&](const json &node, const char *k) -> Decimal {
-    if (!node.contains(k)) {
-      return Decimal{};
-    }
-    if (node[k].is_string()) {
-      return Decimal::from_string(node[k].get<std::string>());
-    }
-    if (node[k].is_number()) {
-      return Decimal::from_string(std::to_string(node[k].get<double>()));
-    }
+const glz_node *find_field(const glz_node &node, const char *key) {
+  if (!node.is_object()) {
+    return nullptr;
+  }
+  const glz_node::object_t &obj = node.get_object();
+  glz_node::object_t::const_iterator it = obj.find(key);
+  if (it == obj.end()) {
+    return nullptr;
+  }
+  return &it->second;
+}
+
+std::string get_string(const glz_node &node, const char *key) {
+  const glz_node *v = find_field(node, key);
+  if (!v || !v->is_string()) {
+    return {};
+  }
+  return v->get<std::string>();
+}
+
+Decimal get_decimal(const glz_node &node, const char *key) {
+  const glz_node *v = find_field(node, key);
+  if (!v) {
     return Decimal{};
-  };
-  auto get_uint256 = [&](const json &node, const char *k) -> uint256_t {
-    if (!node.contains(k) || !node[k].is_string()) {
-      return uint256_t{};
-    }
-    return uint256_t::from_string(node[k].get<std::string>());
-  };
-  auto get_side = [&](const json &node, const char *k) -> Side {
-    const std::string s = node.value(k, std::string{});
-    if (s == "BUY" || s == "buy") {
-      return Side::Buy;
-    }
-    return Side::Sell;
-  };
-  auto get_ts = [&](const json &node, const char *k) -> Timestamp {
-    // Polymarket emits timestamps as Unix-millisecond integers (or
-    // their string form). The SDK alias ``Timestamp = int64_t`` is
-    // already the wire form; just parse and assign.
-    if (!node.contains(k)) {
+  }
+  if (v->is_string()) {
+    return Decimal::from_string(v->get<std::string>());
+  }
+  if (v->is_number()) {
+    return Decimal::from_string(std::to_string(v->get<double>()));
+  }
+  return Decimal{};
+}
+
+uint256_t get_uint256(const glz_node &node, const char *key) {
+  const glz_node *v = find_field(node, key);
+  if (!v || !v->is_string()) {
+    return uint256_t{};
+  }
+  return uint256_t::from_string(v->get<std::string>());
+}
+
+Side get_side(const glz_node &node, const char *key) {
+  const std::string s = get_string(node, key);
+  if (s == "BUY" || s == "buy") {
+    return Side::Buy;
+  }
+  return Side::Sell;
+}
+
+Timestamp get_timestamp(const glz_node &node, const char *key) {
+  const glz_node *v = find_field(node, key);
+  if (!v) {
+    return Timestamp{};
+  }
+  if (v->is_string()) {
+    try {
+      return static_cast<Timestamp>(std::stoll(v->get<std::string>()));
+    } catch (...) {
       return Timestamp{};
     }
-    if (node[k].is_string()) {
-      try {
-        return static_cast<Timestamp>(std::stoll(node[k].get<std::string>()));
-      } catch (...) {
-        return Timestamp{};
-      }
-    }
-    if (node[k].is_number_integer()) {
-      return static_cast<Timestamp>(node[k].get<long long>());
-    }
-    return Timestamp{};
-  };
+  }
+  if (v->is_number()) {
+    return static_cast<Timestamp>(v->get<double>());
+  }
+  return Timestamp{};
+}
+
+bool get_bool_field(const glz_node &node, const char *key, bool fallback) {
+  const glz_node *v = find_field(node, key);
+  if (!v || !v->is_boolean()) {
+    return fallback;
+  }
+  return v->get<bool>();
+}
+
+/// Parse one inbound JSON message into a typed ``WsMessage`` variant.
+/// Returns ``std::nullopt`` for unknown ``event_type`` values; the
+/// caller logs and drops. Field reads all go through ``find_field``
+/// so missing optional fields produce a well-typed default rather
+/// than throwing.
+std::optional<WsMessage> parse_message(const glz_node &j) {
+  const std::string ev = get_string(j, "event_type");
 
   if (ev == "book") {
     BookSnapshot s;
     s.asset_id = get_uint256(j, "asset_id");
-    s.timestamp = get_ts(j, "timestamp");
-    s.hash = j.value("hash", std::string{});
-    if (j.contains("bids")) {
-      for (const auto &b : j["bids"]) {
+    s.timestamp = get_timestamp(j, "timestamp");
+    s.hash = get_string(j, "hash");
+    const glz_node *bids = find_field(j, "bids");
+    if (bids && bids->is_array()) {
+      for (const glz_node &b : bids->get_array()) {
         s.bids.push_back({get_decimal(b, "price"), get_decimal(b, "size")});
       }
     }
-    if (j.contains("asks")) {
-      for (const auto &a : j["asks"]) {
+    const glz_node *asks = find_field(j, "asks");
+    if (asks && asks->is_array()) {
+      for (const glz_node &a : asks->get_array()) {
         s.asks.push_back({get_decimal(a, "price"), get_decimal(a, "size")});
       }
     }
@@ -175,16 +223,16 @@ std::optional<WsMessage> parse_message(const json &j) {
     d.price = get_decimal(j, "price");
     d.size = get_decimal(j, "size");
     d.side = get_side(j, "side");
-    d.timestamp = get_ts(j, "timestamp");
+    d.timestamp = get_timestamp(j, "timestamp");
     return d;
   }
   if (ev == "tick_size_change") {
     TickSizeChange t;
     t.asset_id = get_uint256(j, "asset_id");
-    t.timestamp = get_ts(j, "timestamp");
+    t.timestamp = get_timestamp(j, "timestamp");
     // ``new_tick_size`` arrives as a numeric string ("0.01", "0.001"
     // etc). The SDK's TickSize is a closed enum; map by literal.
-    const std::string nts = j.value("new_tick_size", std::string{});
+    const std::string nts = get_string(j, "new_tick_size");
     if (nts == "0.1") {
       t.new_tick_size = TickSize::Tenth;
     } else if (nts == "0.01") {
@@ -202,40 +250,41 @@ std::optional<WsMessage> parse_message(const json &j) {
     LastTradePriceMessage m;
     m.asset_id = get_uint256(j, "asset_id");
     m.price = get_decimal(j, "price");
-    m.timestamp = get_ts(j, "timestamp");
+    m.timestamp = get_timestamp(j, "timestamp");
     return m;
   }
   if (ev == "order") {
     OrderFill f;
-    f.order_id = j.value("id", std::string{});
+    f.order_id = get_string(j, "id");
     f.asset_id = get_uint256(j, "asset_id");
     f.price = get_decimal(j, "price");
     f.size = get_decimal(j, "size");
     f.side = get_side(j, "side");
-    f.is_taker = j.value("is_taker", false);
-    f.timestamp = get_ts(j, "timestamp");
-    if (j.contains("transaction_hash") && j["transaction_hash"].is_string()) {
-      f.transaction_hash = j["transaction_hash"].get<std::string>();
+    f.is_taker = get_bool_field(j, "is_taker", false);
+    f.timestamp = get_timestamp(j, "timestamp");
+    const std::string tx = get_string(j, "transaction_hash");
+    if (!tx.empty()) {
+      f.transaction_hash = tx;
     }
     return f;
   }
   if (ev == "cancel") {
     OrderCancel c;
-    c.order_id = j.value("id", std::string{});
+    c.order_id = get_string(j, "id");
     c.asset_id = get_uint256(j, "asset_id");
-    c.reason = j.value("reason", std::string{});
-    c.timestamp = get_ts(j, "timestamp");
+    c.reason = get_string(j, "reason");
+    c.timestamp = get_timestamp(j, "timestamp");
     return c;
   }
   if (ev == "trade") {
     TradeConfirm t;
-    t.trade_id = j.value("id", std::string{});
-    t.order_id = j.value("order_id", std::string{});
+    t.trade_id = get_string(j, "id");
+    t.order_id = get_string(j, "order_id");
     t.asset_id = get_uint256(j, "asset_id");
     t.price = get_decimal(j, "price");
     t.size = get_decimal(j, "size");
-    t.timestamp = get_ts(j, "timestamp");
-    const std::string st = j.value("status", std::string{});
+    t.timestamp = get_timestamp(j, "timestamp");
+    const std::string st = get_string(j, "status");
     if (st == "MATCHED" || st == "matched") {
       t.status = TradeStatus::Matched;
     } else if (st == "MINED" || st == "mined") {
@@ -380,16 +429,16 @@ static int clob_ws_callback(struct lws *wsi, enum lws_callback_reasons reason,
     std::string payload = std::move(impl->fragment_buf);
     impl->fragment_buf.clear();
 
-    json parsed;
-    try {
-      parsed = json::parse(payload);
-    } catch (const std::exception &e) {
-      impl->emit_error(0, std::string{"invalid JSON: "} + e.what());
+    glz_node parsed{};
+    glz::error_ctx ec = glz::read_json(parsed, payload);
+    if (ec) {
+      impl->emit_error(0, std::string{"invalid JSON: "} +
+                              glz::format_error(ec, payload));
       return 0;
     }
 
-    auto dispatch_one = [&](const json &j) {
-      auto msg = parse_message(j);
+    auto dispatch_one = [&](const glz_node &j) {
+      std::optional<WsMessage> msg = parse_message(j);
       if (!msg.has_value()) {
         return;
       }
@@ -398,7 +447,7 @@ static int clob_ws_callback(struct lws *wsi, enum lws_callback_reasons reason,
       }
     };
     if (parsed.is_array()) {
-      for (const auto &el : parsed) {
+      for (const glz_node &el : parsed.get_array()) {
         dispatch_one(el);
       }
     } else {
