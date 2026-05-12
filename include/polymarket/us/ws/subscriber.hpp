@@ -11,7 +11,9 @@
 ///     our USA-only universe is currently ~60 active so one shard fits)
 ///   - Ed25519-signed handshake via the same canonical message format
 ///     the REST client uses ({timestamp}{method}{path})
-///   - Heartbeat send `{"heartbeat":{}}` on a fixed interval
+///   - Passive heartbeat handling. The official Polymarket US SDK
+///     listens for heartbeat events but does not send unsolicited
+///     application heartbeat frames.
 ///   - Auto-reconnect: caller-driven via a single `connect()` retry on
 ///     `disconnect`; no exponential ladder yet (Polymarket docs don't
 ///     specify the right backoff and a fixed 5s retry is the kalshi
@@ -50,8 +52,9 @@ struct SubscriberConfig {
   /// Override host for testing. Defaults to api.polymarket.us. Path is
   /// fixed at /v1/ws/markets for this MVP.
   std::string host = "api.polymarket.us";
-  /// Heartbeat interval. Polymarket docs are silent on the right
-  /// value; 30 s mirrors the kalshi-websocket production setting.
+  /// Retained for ABI/source compatibility with existing services. The
+  /// subscriber no longer sends unsolicited application heartbeat frames
+  /// because the Polymarket US gateway rejects them as invalid messages.
   std::chrono::seconds heartbeat = std::chrono::seconds{30};
 };
 

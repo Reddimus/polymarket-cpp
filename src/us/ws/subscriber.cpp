@@ -7,7 +7,8 @@
 ///   - Ed25519 (seed||pub) instead of RSA-PSS
 ///   - X-PM-Access-Key/Timestamp/Signature headers
 ///   - {"subscribe":{"requestId":..., "subscriptionType":..., ...}} frame
-///   - {"heartbeat":{}} ping frame
+///   - passive heartbeat handling; the official SDK does not send
+///     unsolicited application heartbeat frames
 
 #include "polymarket/us/ws/subscriber.hpp"
 
@@ -66,7 +67,6 @@ std::string build_subscribe_frame(std::string_view subscription_type,
   return o.str();
 }
 
-constexpr const char *kHeartbeatFrame = R"({"heartbeat":{}})";
 constexpr std::size_t kMaxFrameSize = 1 << 20; // 1 MiB
 
 } // namespace
@@ -93,9 +93,6 @@ struct Subscriber::Impl {
   std::thread service_thread;
   std::atomic<bool> connected{false};
   std::atomic<bool> should_stop{false};
-
-  // Heartbeat tracking.
-  std::chrono::steady_clock::time_point last_heartbeat{};
 
   // Outbound queue. lws_write must be called from the service thread
   // in response to a writable callback, so subscribe/heartbeat enqueue
@@ -167,7 +164,6 @@ static int subscriber_callback(struct lws *wsi,
 
   case LWS_CALLBACK_CLIENT_ESTABLISHED: {
     impl->connected.store(true, std::memory_order_release);
-    impl->last_heartbeat = std::chrono::steady_clock::now();
     if (impl->state_cb)
       impl->state_cb(true);
     return 0;
@@ -307,20 +303,16 @@ Result<void> Subscriber::connect() {
         Error::network("lws_client_connect_via_info failed"));
   }
 
-  // Service thread: pumps lws + sends periodic heartbeats.
+  // Service thread: pumps libwebsockets. Do not send unsolicited
+  // application heartbeat frames here: Polymarket's official SDK only
+  // listens for inbound heartbeat events, and production observed
+  // `{"heartbeat":{}}` client frames being answered with
+  // `{"error":"invalid_message"}` every 30 seconds.
   impl_->should_stop.store(false, std::memory_order_release);
   impl_->service_thread = std::thread([impl = impl_.get()]() {
     while (!impl->should_stop.load(std::memory_order_acquire) &&
            impl->context) {
       lws_service(impl->context, 50);
-      // Heartbeat tick (only after connect, only if cadence elapsed).
-      if (impl->connected.load(std::memory_order_acquire)) {
-        const auto now = std::chrono::steady_clock::now();
-        if (now - impl->last_heartbeat >= impl->cfg.heartbeat) {
-          impl->enqueue(kHeartbeatFrame);
-          impl->last_heartbeat = now;
-        }
-      }
     }
   });
 
