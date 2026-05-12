@@ -62,6 +62,7 @@ catch_discover_tests(polymarket_tests)
 add_executable(polymarket_parse_benchmark parse_benchmark.cpp)
 target_link_libraries(polymarket_parse_benchmark PRIVATE
     polymarket_core
+    polymarket_crypto
     glaze::glaze
 )
 target_compile_features(polymarket_parse_benchmark PRIVATE cxx_std_23)
