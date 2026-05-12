@@ -85,21 +85,18 @@ FetchContent_Declare(secp256k1
 )
 FetchContent_MakeAvailable(secp256k1)
 
-# nlohmann/json — header-only. Used by the CLOB WebSocket message
-# dispatcher. Promoting it from a tests-only transitive (it ships
-# inside cpp-httplib's deps) to a first-class dep so production
-# code can include it safely without depending on the test build.
-# FetchContent name is "json" (not "nlohmann_json") so it matches the
-# convention every sibling consumer (infra-cpp/kalshi, open-meteo-data,
-# nws-data, kalshi-market-data, polymarket-trader's transitive
-# infra-cpp) uses; first-registered-wins dedupe then keeps a single
-# `nlohmann_json` target across the dep tree.
-FetchContent_Declare(json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG        v3.11.3
+# Glaze — JSON library (compile-time reflection, ~3-4x parse speedup
+# over nlohmann on numeric-heavy payloads — the CLOB orderbook hot
+# path). Used by the CLOB WebSocket message dispatcher + the
+# polymarket_us_cli stdin/stdout JSON envelope. License: MIT.
+# Migrated from nlohmann/json v3.11.3 on 2026-05-11; the previous
+# `FetchContent_Declare(json ...)` dep is removed.
+FetchContent_Declare(glaze
+    GIT_REPOSITORY https://github.com/stephenberry/glaze.git
+    GIT_TAG        v7.6.0
     GIT_SHALLOW    TRUE
 )
-FetchContent_MakeAvailable(json)
+FetchContent_MakeAvailable(glaze)
 
 # Include directories
 include_directories(${CMAKE_SOURCE_DIR}/include)
@@ -133,7 +130,6 @@ install(TARGETS
     polymarket_us
     polymarket
     secp256k1
-    nlohmann_json
     EXPORT polymarketTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

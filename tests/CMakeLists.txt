@@ -26,6 +26,7 @@ add_executable(polymarket_tests
     unit/us_cli_test.cpp
     unit/ws_subscriber_test.cpp
     unit/clob_websocket_test.cpp
+    unit/glaze_test.cpp
 )
 
 target_link_libraries(polymarket_tests PRIVATE
@@ -34,6 +35,7 @@ target_link_libraries(polymarket_tests PRIVATE
     polymarket_clob
     polymarket_us
     polymarket_http
+    glaze::glaze
     Catch2::Catch2WithMain
 )
 
@@ -52,3 +54,20 @@ endif()
 include(CTest)
 include(Catch)
 catch_discover_tests(polymarket_tests)
+
+# Parse-throughput benchmark — runs 1k iterations on a representative
+# CLOB book-snapshot payload (~12KB, 200 levels/side). Caps at
+# 400 us/op so CI catches a Glaze-version regression early. See
+# tests/parse_benchmark.cpp for the historical baseline.
+add_executable(polymarket_parse_benchmark parse_benchmark.cpp)
+target_link_libraries(polymarket_parse_benchmark PRIVATE
+    polymarket_core
+    glaze::glaze
+)
+target_compile_features(polymarket_parse_benchmark PRIVATE cxx_std_23)
+add_test(NAME polymarket_parse_benchmark
+         COMMAND polymarket_parse_benchmark)
+# Generous 30s wall-clock timeout. The benchmark itself completes in
+# ~0.1s; the timeout exists to fail-fast on a pathological regression
+# (e.g., quadratic parse) rather than hang CI for 6 hours.
+set_tests_properties(polymarket_parse_benchmark PROPERTIES TIMEOUT 30)

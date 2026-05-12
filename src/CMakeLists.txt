@@ -58,12 +58,13 @@ target_link_libraries(polymarket_clob PUBLIC
     CURL::libcurl
     ${_POLYMARKET_WS_TARGET}
 )
-# nlohmann/json is INTERFACE (header-only). Header inclusion path is
-# what matters; we expose it PRIVATE-ly because no public polymarket
-# header transitively includes it.
-target_link_libraries(polymarket_clob PRIVATE nlohmann_json::nlohmann_json)
+# Glaze is header-only and pulled in via include-path only (matching
+# how nlohmann was integrated pre-migration). This sidesteps CMake's
+# "INTERFACE target not in export set" error that fires if we link
+# glaze::glaze directly onto these installable static libs.
 target_include_directories(polymarket_clob PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${glaze_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 

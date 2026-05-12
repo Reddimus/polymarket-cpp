@@ -6,6 +6,37 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **JSON library**: migrated from nlohmann/json v3.11.3 to
+  [Glaze](https://github.com/stephenberry/glaze) v7.6.0 via FetchContent
+  (commit on `feat/glaze-migration`, 2026-05-11). Glaze's compile-time
+  reflection delivers a ~2-4x parse speedup on representative CLOB
+  orderbook payloads (200 levels/side, ~14.6KB) — measured median on
+  x86_64-v3 GCC 13.3 -O3 -DNDEBUG: nlohmann ~500 us/op → glaze
+  ~290 us/op (Decimal::from_string dominates the per-level work; the
+  JSON parse itself is ≈3x faster but fixed-cost relative to the 400
+  decimal conversions per parse).
+- Affected code: `src/clob/websocket.cpp` (the CLOB WS inbound
+  variant-dispatch parser) and `apps/polymarket_us_cli.cpp` (the
+  stdin/stdout JSON envelope). Both use `glz::generic` because their
+  shapes are dynamic per-message-type / per-command — a static
+  `glz::meta` per type would be heavier on maintenance with no
+  measurable speedup, given how few REST response models exist in the
+  SDK at this point (CLOB and Gamma client structs are stubs; the
+  US REST client returns `Result<std::string>` and lets callers parse).
+- Public SDK API (`polymarket::clob::*`, `polymarket::us::*`,
+  `polymarket::crypto::*`) is unchanged. Consumers (polymarket-trader,
+  polymarket-data) build without modification.
+- New tests: `tests/unit/glaze_test.cpp` (shape-parity guard with 6
+  Catch2 cases including a bool/string overload-set regression) and
+  `tests/parse_benchmark.cpp` (1k-iteration parse benchmark, capped at
+  1000 us/op via `ctest --timeout`). CMakeLists install-list no longer
+  re-exports `nlohmann_json`. Glaze is exposed as a build-interface
+  include path (matching how nlohmann was integrated pre-migration)
+  to sidestep CMake's "INTERFACE target not in export set" error on
+  the installable static libs.
+
 ## [0.3.1] - 2026-05-10
 
 ### Fixed
