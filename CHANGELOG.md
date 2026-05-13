@@ -193,8 +193,6 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   alongside the REST client in `polymarket_us` so consumers don't
   need a new FetchContent target.
 
-[0.1.2]: https://github.com/Reddimus/polymarket-cpp/releases/tag/v0.1.2
-
 ## [0.1.1] - 2026-05-02
 
 ### Added
