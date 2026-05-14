@@ -114,40 +114,7 @@ target_link_libraries(my_bot PRIVATE polymarket::clob)
 
 ## Usage Examples
 
-### Fetch Market Data (Unauthenticated)
-
-```cpp
-#include <polymarket/clob/client.hpp>
-#include <iostream>
-
-int main() {
-    using namespace polymarket::clob;
-    
-    // Create unauthenticated client
-    auto client = Client::create("https://clob.polymarket.com");
-    
-    // Get server time
-    auto time_result = client.get_server_time();
-    if (time_result) {
-        std::cout << "Server time: " << *time_result << std::endl;
-    }
-    
-    // Get markets
-    MarketsRequest req;
-    req.next_cursor = std::nullopt;
-    
-    auto markets = client.get_markets(req);
-    if (markets) {
-        for (const auto& market : markets->data) {
-            std::cout << "Market: " << market.question << std::endl;
-        }
-    }
-    
-    return 0;
-}
-```
-
-### Polymarket US (Ed25519, CFTC-regulated)
+### Polymarket US (Ed25519, CFTC-regulated) — recommended for live trading
 
 ```cpp
 #include <polymarket/us/client.hpp>
@@ -186,7 +153,52 @@ For an end-to-end smoke test (5 endpoints, <1s) see
 `make run-us_smoke` after exporting `PM_US_KEY_ID` and
 `PM_US_SECRET_FILE`.
 
-### Place Orders (Authenticated)
+### Fetch Market Data via CLOB (V1 — deprecated upstream 2026-04-28)
+
+> [!WARNING]
+> The CLOB V1 client below targets `clob.polymarket.com`, which Polymarket
+> upgraded to V2 on 2026-04-28. V1 reads may still respond briefly during
+> the transition but cannot be relied on. Prefer the Polymarket US example
+> above for new code.
+
+```cpp
+#include <polymarket/clob/client.hpp>
+#include <iostream>
+
+int main() {
+    using namespace polymarket::clob;
+    
+    // Create unauthenticated client
+    auto client = Client::create("https://clob.polymarket.com");
+    
+    // Get server time
+    auto time_result = client.get_server_time();
+    if (time_result) {
+        std::cout << "Server time: " << *time_result << std::endl;
+    }
+    
+    // Get markets
+    MarketsRequest req;
+    req.next_cursor = std::nullopt;
+    
+    auto markets = client.get_markets(req);
+    if (markets) {
+        for (const auto& market : markets->data) {
+            std::cout << "Market: " << market.question << std::endl;
+        }
+    }
+    
+    return 0;
+}
+```
+
+### Place Orders via CLOB (V1 — deprecated upstream 2026-04-28)
+
+> [!WARNING]
+> Live order placement against `clob.polymarket.com` will fail under V2.
+> The example below is kept for historical reference and for V2 migrators
+> who want to compare wire shapes. Use `polymarket::us::Client` for live
+> trading.
 
 ```cpp
 #include <polymarket/clob/client.hpp>
