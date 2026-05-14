@@ -1,5 +1,13 @@
 /// @file market_data.cpp
 /// @brief Example: Fetching public market data from Polymarket
+///
+/// @warning **CLOB V1 deprecated 2026-04-28.** Polymarket upgraded
+/// `clob.polymarket.com` to V2 at the 2026-04-28 cutover and V1 is "no
+/// longer supported". Read paths (GET /markets, etc.) may still respond
+/// briefly during the transition but cannot be relied on. See
+/// `include/polymarket/clob/client.hpp` and `CHANGELOG.md`. For
+/// production market-data on the regulated US venue, see
+/// `examples/us_smoke.cpp`.
 
 #include <iostream>
 #include <polymarket/clob/client.hpp>
