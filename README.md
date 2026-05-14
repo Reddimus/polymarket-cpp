@@ -7,9 +7,20 @@ A production-grade C++ SDK for [Polymarket](https://polymarket.com) prediction m
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+> [!WARNING]
+> **CLOB V1 deprecated 2026-04-28.** Polymarket upgraded `clob.polymarket.com`
+> to V2 on 2026-04-28 and declared V1 "no longer supported". The order
+> struct, EIP-712 domain version (1 → 2), and collateral token
+> (USDC.e → pUSD) all changed. The `polymarket::clob::*` modules in this
+> SDK still emit V1-shaped orders and **will fail against live V2
+> endpoints**. Use `polymarket::us::Client` (CFTC-regulated Polymarket US)
+> for live trading until a V2 migration lands. See
+> [the CHANGELOG](CHANGELOG.md) for details.
+
 ## Features
 
-- **Full CLOB API Coverage**: Orders, markets, prices, order books, and more
+- **Full CLOB API Coverage** (V1 — deprecated upstream, see warning above): Orders, markets, prices, order books, and more
+- **Polymarket US (CFTC-regulated)**: Ed25519-signed access to `api.polymarket.us`, production-ready
 - **Type-Safe Order Builders**: Compile-time validation for limit and market orders
 - **EIP-712 Signing**: Complete cryptographic support for Ethereum-compatible signatures
 - **Modern C++23**: Uses `std::expected`, `std::span`, and other modern features

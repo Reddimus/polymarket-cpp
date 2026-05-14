@@ -6,6 +6,18 @@
 /// Provides a clean API for interacting with Polymarket's CLOB API.
 /// Authentication is managed internally - public methods work without auth,
 /// authenticated methods require calling authenticate() first.
+///
+/// @warning **CLOB V1 deprecation**: Polymarket upgraded `clob.polymarket.com`
+/// from V1 to V2 on 2026-04-28. V1 is "no longer supported" upstream and
+/// legacy V1 orders were wiped at the cutover. The order struct, EIP-712
+/// Exchange domain version (1 → 2), and collateral token (USDC.e → pUSD)
+/// all changed. This client still emits V1-shaped orders and will hit
+/// errors against live V2 endpoints. Track [docs.polymarket.com/changelog]
+/// (https://docs.polymarket.com/changelog) and prefer
+/// `polymarket::us::Client` (CFTC-regulated, separate API) for live
+/// trading until a V2 migration lands. Open-source consumers needing
+/// offshore CLOB access should pin to a polymarket-cpp tag predating the
+/// V2 cutover or contribute the migration upstream.
 
 #include "polymarket/clob/order_builder.hpp"
 #include "polymarket/clob/types.hpp"
