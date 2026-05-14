@@ -6,6 +6,21 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Deprecated
+
+- **`polymarket::clob::Client`** — Polymarket upgraded
+  `clob.polymarket.com` from V1 to V2 on 2026-04-28 and declared V1 "no
+  longer supported". Legacy V1 orders were wiped at the cutover. The
+  order struct (`nonce` / `feeRateBps` / `taker` removed; `timestamp` /
+  `metadata` / `builder` added), EIP-712 Exchange domain version (1 →
+  2), and collateral token (USDC.e → pUSD) all changed. This SDK still
+  emits V1-shaped orders; live calls against `clob.polymarket.com` will
+  fail. The deprecation notice is now in the public header
+  (`include/polymarket/clob/client.hpp`) so consumers see it at
+  include time. The CFTC-regulated `polymarket::us::Client` is
+  unaffected and remains production-ready for live trading. A full V2
+  migration is tracked as future work.
+
 ## [0.4.1] - 2026-05-12
 
 ### Fixed
