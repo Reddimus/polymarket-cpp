@@ -86,7 +86,7 @@ include(FetchContent)
 FetchContent_Declare(
     polymarket_cpp
     GIT_REPOSITORY https://github.com/Reddimus/polymarket-cpp.git
-    GIT_TAG v0.3.1  # pin a tagged release; see CHANGELOG.md
+    GIT_TAG v0.4.1  # pin a tagged release; see CHANGELOG.md
 )
 FetchContent_MakeAvailable(polymarket-cpp)
 
