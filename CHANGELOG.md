@@ -6,6 +6,22 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-12
+
+### Fixed
+
+- **`polymarket::us::ws::Subscriber`** — stop emitting invalid
+  application-level heartbeat frames. The pre-fix loop enqueued a
+  literal `{"heartbeat":{}}` text frame on a timer, but
+  `api.polymarket.us` does not advertise that frame in its protocol
+  and the gateway closed the connection on receipt, occasionally
+  triggering reconnect storms. The official SDK matches: it does
+  not send unsolicited application heartbeat frames. The heartbeat
+  frame, the `kHeartbeatFrame` constant, the `last_heartbeat` clock,
+  and the corresponding enqueue/drain wiring are all removed —
+  libwebsockets' own keepalive (`ws_ping_pong_interval`) is
+  sufficient to keep the TCP path alive.
+
 ## [0.4.0] - 2026-05-12
 
 ### Changed
