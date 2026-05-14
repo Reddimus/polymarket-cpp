@@ -258,7 +258,15 @@ int main() {
 }
 ```
 
-## Authentication Flow
+## Authentication Flow (CLOB V1 — deprecated upstream 2026-04-28)
+
+> [!WARNING]
+> The L1/L2 auth flow below applies to **CLOB V1 only**. Polymarket's
+> 2026-04-28 V2 cutover replaced this signing flow (EIP-712 domain
+> version bumped 1 → 2, taker/feeRateBps removed from the order
+> struct). For live Polymarket US trading, see the Ed25519-based
+> `polymarket::us::Client` example above — no derive-API-key step,
+> single HMAC-free header set, simpler all around.
 
 ```mermaid
 sequenceDiagram
@@ -284,7 +292,15 @@ sequenceDiagram
     Client-->>User: Order ID
 ```
 
-## Order Builder Flow
+## Order Builder Flow (CLOB V1 — deprecated upstream 2026-04-28)
+
+> [!WARNING]
+> The order builder + EIP-712 sign + POST flow below targets CLOB V1.
+> V2 deprecated this flow on 2026-04-28; see the
+> [Polymarket changelog](https://docs.polymarket.com/changelog) for the
+> new order struct (timestamp / metadata / builder fields, removed
+> nonce / feeRateBps / taker). The diagram is kept for V1 historical
+> reference and as a reference shape for anyone porting to V2.
 
 ```mermaid
 flowchart TD
