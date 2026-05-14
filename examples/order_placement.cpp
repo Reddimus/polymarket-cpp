@@ -1,5 +1,13 @@
 /// @file order_placement.cpp
 /// @brief Example: Placing orders on Polymarket (requires credentials)
+///
+/// @warning **CLOB V1 deprecated 2026-04-28.** This example uses the legacy
+/// V1 order shape (`nonce` / `feeRateBps` / `taker`); Polymarket upgraded
+/// `clob.polymarket.com` to V2 at the 2026-04-28 cutover and V1 is "no
+/// longer supported". Running this example against the live endpoint will
+/// fail. See `include/polymarket/clob/client.hpp` and `CHANGELOG.md` for
+/// context. For live trading prefer `polymarket::us::Client` (CFTC-
+/// regulated, Ed25519, production-ready) — see `examples/us_smoke.cpp`.
 
 #include <cstdlib>
 #include <iostream>
