@@ -6,6 +6,8 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-05-14
+
 ### Deprecated
 
 - **`polymarket::clob::Client`** — Polymarket upgraded
