@@ -6,6 +6,32 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `.clang-format` (fleet-standard: tabs, 4-width, LF, UTF-8, 100-col
+  max for C++). Closes the gap where `make lint` was checking against
+  the clang-format LLVM default (2-space, 80-col), inconsistent with
+  sibling SDKs and with the CLAUDE.md "tabs, 100 cols" claim. Includes
+  a one-shot 47-file mechanical reflow.
+- `.editorconfig` (matches `.clang-format` — tabs, LF, UTF-8). Covers
+  editors that don't read `.clang-format` (Vim, VS Code without the
+  extension).
+
+### Changed
+
+- README: reordered "Usage Examples" so `polymarket::us::Client` (the
+  live trading path) appears before the deprecated CLOB V1 client.
+  Auth + Order Builder flow diagrams now flag CLOB V1 deprecation
+  inline rather than only in the CHANGELOG. New contributors see the
+  supported path first.
+- Gamma + Data stub docstrings rewritten with explicit deferral
+  context (which endpoints are unimplemented, why, when they're
+  expected).
+
+### Fixed
+
+- `LICENSE.md`: expanded truncated copyright holder name.
+
 ## [0.4.2] - 2026-05-14
 
 ### Deprecated
