@@ -24,7 +24,7 @@ make run-order_placement    # examples/order_placement.cpp (needs PRIVATE_KEY en
 - **JSON**: [Glaze](https://github.com/stephenberry/glaze) v7.6.0 via FetchContent (compile-time reflection, ~2-4x parse speedup over nlohmann on CLOB orderbook payloads — migrated 2026-05-11). The CLOB WS dispatcher and the `polymarket_us_cli` stdin/stdout envelope both use `glz::generic` because their shapes are dynamic per-message-type / per-command. See `tests/parse_benchmark.cpp` for the regression guard. Gotcha: `glz::generic{object_t{...}}` (variant-converting constructor) serializes via the variant write path (`[index, value]`); build objects with `operator[]=` or `= object_t{}` instead.
 - **US client** (`src/us/client.cpp`, shipped in v0.1.0): full Ed25519-signed access to `api.polymarket.us` (authed) + `gateway.polymarket.us` (public). 15+ endpoints — markets list/detail, orderbook, settlement, tags, candles (authed-host routed), account balances, positions, activities, orders. `set_credentials()` validates the base64 secret decodes to exactly 64 bytes and slices `[:32]` for the Ed25519 seed. `http::Client` is `CURLOPT_IPRESOLVE = V4`-pinned to avoid Docker IPv6 reconnect-loops.
 - **Stubs**: Gamma/Data clients exist but most endpoints are unimplemented (offshore CLOB scope, deferred).
-- **Tests**: Catch2 via FetchContent (24 cases including `[us][regression]` for the v0.1.0 `append_query` bool overload tail-recursion fix).
+- **Tests**: Catch2 via FetchContent (61 cases as of v0.4.2, including `[us][regression]` for the v0.1.0 `append_query` bool overload tail-recursion fix).
 
 ## Conventions
 
@@ -35,4 +35,4 @@ make run-order_placement    # examples/order_placement.cpp (needs PRIVATE_KEY en
 
 ## CI
 
-GitHub Actions workflow `.github/workflows/ci.yml`: build on Ubuntu 24.04 + macos-latest, lint via clang-format and markdown-lint. macOS Test step disabled (`if: false`) pending crypto-test root-cause. Release workflow auto-creates a GitHub Release on `vX.Y.Z` tag push (notes extracted from `CHANGELOG.md` via `--notes-file` so inline `code` spans survive). First release `v0.1.0` cut 2026-05-02; bump consumers via FetchContent `GIT_TAG v0.1.x`.
+GitHub Actions workflow `.github/workflows/ci.yml`: build on Ubuntu 24.04 + macos-latest + windows-latest, lint via clang-format and markdown-lint. macOS Test step disabled (`if: false`) pending crypto-test root-cause. Release workflow auto-creates a GitHub Release on `vX.Y.Z` tag push (notes extracted from `CHANGELOG.md` via `--notes-file` so inline `code` spans survive). Current release `v0.4.2` (2026-05-14); bump consumers via FetchContent `GIT_TAG v0.4.x`. See [README.md](./README.md) for the canonical install snippet.
