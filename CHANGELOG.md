@@ -6,6 +6,8 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-05-19
+
 ### Added
 
 - `.clang-format` (fleet-standard: tabs, 4-width, LF, UTF-8, 100-col
