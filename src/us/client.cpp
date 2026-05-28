@@ -84,6 +84,18 @@ std::optional<std::string> order_intent_from_side(const std::string& side) {
 	return std::nullopt;
 }
 
+std::optional<std::string> time_in_force_from_request(const std::optional<std::string>& tif) {
+	if (!tif.has_value() || tif->empty() || *tif == "gtc" || *tif == "good_till_cancel" ||
+		*tif == "TIME_IN_FORCE_GOOD_TILL_CANCEL") {
+		return "TIME_IN_FORCE_GOOD_TILL_CANCEL";
+	}
+	if (*tif == "ioc" || *tif == "immediate_or_cancel" ||
+		*tif == "TIME_IN_FORCE_IMMEDIATE_OR_CANCEL") {
+		return "TIME_IN_FORCE_IMMEDIATE_OR_CANCEL";
+	}
+	return std::nullopt;
+}
+
 } // namespace
 
 struct Client::Impl {
@@ -364,16 +376,31 @@ Result<std::string> Client::place_order(const OrderRequest& request) {
 			"OrderRequest.type must be 'limit' or 'market' (got: " + request.type + ")"));
 	}
 
+	const std::optional<std::string> time_in_force =
+		time_in_force_from_request(request.time_in_force);
+	if (!time_in_force.has_value()) {
+		return std::unexpected(Error::validation(
+			"OrderRequest.time_in_force must be empty, 'gtc', 'good_till_cancel', "
+			"'ioc', 'immediate_or_cancel', or a supported TIME_IN_FORCE_* value (got: " +
+			*request.time_in_force + ")"));
+	}
+
 	std::ostringstream body;
 	body << "{" << R"("marketSlug":")" << request.market_id << "\"," << R"("intent":")" << *intent
-		 << R"(",)" << R"("type":")" << type_str << R"(",)"
-		 << R"("timeInForce":"TIME_IN_FORCE_GOOD_TILL_CANCEL",)" << R"("quantity":")"
-		 << request.size.to_string() << "\"," << R"("price":")" << request.price.to_string()
-		 << "\"";
+		 << R"(",)" << R"("type":")" << type_str << R"(",)" << R"("timeInForce":")"
+		 << *time_in_force << R"(",)" << R"("quantity":")" << request.size.to_string() << "\","
+		 << R"("price":")" << request.price.to_string() << "\"";
 	// post-only is "participateDontInitiate" per docs — emit only when
 	// explicitly requested, so the wire payload stays minimal otherwise.
 	if (request.post_only.value_or(false)) {
 		body << R"(,"participateDontInitiate":true)";
+	}
+	if (request.client_order_id.has_value() && !request.client_order_id->empty()) {
+		body << R"(,"clientOrderId":")" << *request.client_order_id << "\"";
+	}
+	if (request.manual_order_indicator.has_value()) {
+		body << R"(,"manualOrderIndicator":)"
+			 << (*request.manual_order_indicator ? "true" : "false");
 	}
 	body << "}";
 	return impl_->authed_request(http::Method::POST, "/v1/orders", body.str());

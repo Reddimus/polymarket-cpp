@@ -351,6 +351,13 @@ flowchart TD
 | | Orders (single + batched + cancel + modify) | ✅ |
 | | WebSocket subscriber | ✅ |
 
+US order placement accepts short aliases or docs enums for
+`time_in_force`. Omitted values remain
+`TIME_IN_FORCE_GOOD_TILL_CANCEL`; live weather traders should set
+`time_in_force="ioc"` for entry orders so stale quotes do not rest as
+open GTC exposure. Optional `client_order_id` and
+`manual_order_indicator` fields are passed through when supplied.
+
 ## Directory Structure
 
 ```

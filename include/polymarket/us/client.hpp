@@ -66,6 +66,12 @@ struct OrderRequest {
 	Decimal size;	  ///< Size in shares
 	std::optional<bool> post_only;
 	std::optional<int64_t> expiration;
+	/// Optional docs enum or short alias:
+	/// "gtc"/"good_till_cancel", "ioc"/"immediate_or_cancel",
+	/// or explicit TIME_IN_FORCE_* value. Defaults to GTC.
+	std::optional<std::string> time_in_force;
+	std::optional<std::string> client_order_id;
+	std::optional<bool> manual_order_indicator;
 };
 
 /// Polymarket US API client

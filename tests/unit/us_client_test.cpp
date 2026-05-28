@@ -230,6 +230,30 @@ TEST_CASE("Polymarket US place_order rejects unknown type without HTTP call",
 	REQUIRE_THAT(result.error().message(), Catch::Matchers::ContainsSubstring("type"));
 }
 
+TEST_CASE("Polymarket US place_order validates time-in-force before HTTP call",
+		  "[us][orders][validation]") {
+	Client client;
+	OrderRequest req;
+	req.market_id = "tc-temp-nychigh-2026-05-02-gte56lt57";
+	req.side = "buy";
+	req.type = "limit";
+	req.price = Decimal::from_string("0.50");
+	req.size = Decimal::from_string("10");
+	req.time_in_force = "ioc";
+	req.client_order_id = "weather-trader-test";
+	req.manual_order_indicator = false;
+
+	auto result = client.place_order(req);
+	REQUIRE_FALSE(result.has_value());
+	REQUIRE_THAT(result.error().message(), Catch::Matchers::ContainsSubstring("set_credentials"));
+	REQUIRE_THAT(result.error().message(), !Catch::Matchers::ContainsSubstring("time_in_force"));
+
+	req.time_in_force = "bad-tif";
+	result = client.place_order(req);
+	REQUIRE_FALSE(result.has_value());
+	REQUIRE_THAT(result.error().message(), Catch::Matchers::ContainsSubstring("time_in_force"));
+}
+
 TEST_CASE("Polymarket US get_order_by_id requires credentials", "[us][orders][validation]") {
 	// Reconciliation polling needs to read a single order's status to
 	// promote live_pending → live_filled. The endpoint is authenticated;
