@@ -80,7 +80,7 @@ graph TB
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourorg/polymarket-cpp.git
+git clone https://github.com/Reddimus/polymarket-cpp.git
 cd polymarket-cpp
 
 # Build
@@ -430,4 +430,4 @@ This is an unofficial, third-party SDK. It is not affiliated with, endorsed by, 
 - [Polymarket Documentation](https://docs.polymarket.com)
 - [Official Python SDK](https://github.com/Polymarket/py-clob-client)
 - [Official TypeScript SDK](https://github.com/Polymarket/clob-client)
-- [kalshi-cpp](https://github.com/yourorg/kalshi-cpp) - Similar C++ SDK for Kalshi
+- [kalshi-cpp](https://github.com/Reddimus/kalshi-cpp) - Similar C++ SDK for Kalshi
