@@ -210,6 +210,13 @@ public:
 		return Decimal((value_ * other.value_) / SCALE);
 	}
 	Decimal operator/(const Decimal& other) const {
+		// Guard division by zero: integer division by 0 is undefined behavior
+		// (SIGFPE on most targets). No-exceptions house style → return zero
+		// rather than throw; callers that care must check the divisor's
+		// is_zero() first.
+		if (other.value_ == 0) {
+			return Decimal(static_cast<std::int64_t>(0));
+		}
 		return Decimal((value_ * SCALE) / other.value_);
 	}
 
@@ -220,6 +227,13 @@ public:
 	/// Convert to uint64 with specified decimal places
 	/// e.g., to_uint64_scaled(6) converts 1.5 to 1500000
 	[[nodiscard]] std::uint64_t to_uint64_scaled(int decimals) const {
+		// A negative fixed-point value has no uint64 representation; casting it
+		// wraps to a huge bogus magnitude (e.g. a monstrous order amount on the
+		// wire). Clamp to 0 — the safe degenerate for the order size/price
+		// callers (a negative size/price is a caller error, not a real order).
+		if (value_ < 0) {
+			return 0;
+		}
 		if (decimals == DECIMALS) {
 			return static_cast<std::uint64_t>(value_);
 		} else if (decimals > DECIMALS) {
