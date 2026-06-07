@@ -157,4 +157,18 @@ TEST_CASE("Decimal", "[types]") {
 		auto scaled = price.to_uint64_scaled(6);
 		REQUIRE(scaled == 523000);
 	}
+
+	SECTION("Division by zero returns zero (no UB/SIGFPE)") {
+		// Regression: integer division by 0 was undefined behavior.
+		Decimal a("1.5");
+		Decimal z("0");
+		REQUIRE((a / z).is_zero());
+	}
+
+	SECTION("Negative value scales to zero, not a wrapped huge uint64") {
+		// Regression: casting a negative fixed-point to uint64 wrapped to a
+		// monstrous magnitude. Clamp to 0.
+		Decimal n("-1.5");
+		REQUIRE(n.to_uint64_scaled(6) == 0u);
+	}
 }
