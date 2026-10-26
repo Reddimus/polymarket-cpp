@@ -3,21 +3,11 @@
 /// @file client.hpp
 /// @brief CLOB REST API client
 ///
-/// Provides a clean API for interacting with Polymarket's CLOB API.
-/// Authentication is managed internally - public methods work without auth,
-/// authenticated methods require calling authenticate() first.
-///
-/// @warning **CLOB V1 deprecation**: Polymarket upgraded `clob.polymarket.com`
-/// from V1 to V2 on 2026-04-28. V1 is "no longer supported" upstream and
-/// legacy V1 orders were wiped at the cutover. The order struct, EIP-712
-/// Exchange domain version (1 → 2), and collateral token (USDC.e → pUSD)
-/// all changed. This client still emits V1-shaped orders and will hit
-/// errors against live V2 endpoints. Track [docs.polymarket.com/changelog]
-/// (https://docs.polymarket.com/changelog) and prefer
-/// `polymarket::us::Client` (CFTC-regulated, separate API) for live
-/// trading until a V2 migration lands. Open-source consumers needing
-/// offshore CLOB access should pin to a polymarket-cpp tag predating the
-/// V2 cutover or contribute the migration upstream.
+/// Selected public reads and legacy signing helpers. Authenticate before
+/// account operations; unsupported methods return explicit errors.
+/// @warning V1 order signing is incompatible with current CLOB production.
+/// A full V2 migration is required; older SDK tags do not restore compatibility.
+/// Polymarket US is a separate API with separate credentials and eligibility.
 
 #include <chrono>
 #include <functional>
@@ -67,21 +57,8 @@ struct BuilderKeyCredentials {
 	std::string passphrase;
 };
 
-/// Main CLOB API client
-///
-/// Example usage:
-/// ```cpp
-/// auto client = Client::create();
-///
-/// // Public endpoint (no auth required)
-/// auto health = client.ok();
-///
-/// // Authenticate with private key
-/// client.authenticate(private_key);
-///
-/// // Now can use authenticated endpoints
-/// auto orders = client.orders();
-/// ```
+/// Legacy CLOB client with selected reads and signing. See README for scope.
+/// create() returns Result<Client>; check it before calling through ->.
 class Client {
 public:
 	/// Create a client with default configuration
@@ -91,7 +68,7 @@ public:
 	// Authentication
 	// =========================================================================
 
-	/// Check if client is authenticated
+	/// Whether API credentials are configured; the service checks their validity.
 	[[nodiscard]] bool is_authenticated() const noexcept;
 
 	/// Check if client has builder credentials
@@ -107,7 +84,8 @@ public:
 
 	/// Authenticate using existing API credentials
 	Result<void> authenticate(const ApiKeyCredentials& credentials, const Address& signer_address,
-							  std::optional<Address> funder = std::nullopt);
+							  std::optional<Address> funder = std::nullopt,
+							  SignatureType sig_type = SignatureType::EOA);
 
 	/// Set builder credentials for order attribution
 	Result<void> set_builder_credentials(const BuilderKeyCredentials& credentials);
@@ -150,9 +128,11 @@ public:
 	[[nodiscard]] Result<LastTradePriceResponse> last_trade_price(uint256_t token_id);
 
 	/// Get orderbook for a token
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] Result<OrderBookResponse> book(const OrderBookRequest& request);
 
 	/// Get orderbooks for multiple tokens
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] Result<std::vector<OrderBookResponse>>
 	books(const std::vector<OrderBookRequest>& requests);
 
@@ -166,9 +146,11 @@ public:
 	[[nodiscard]] Result<FeeRateResponse> fee_rate_bps(uint256_t token_id);
 
 	/// Get price history
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] Result<PriceHistoryResponse> price_history(const PriceHistoryRequest& request);
 
 	/// Get markets with pagination
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] Result<PaginatedResponse<MarketResponse>>
 	markets(std::optional<Cursor> cursor = std::nullopt);
 
@@ -196,9 +178,11 @@ public:
 	// =========================================================================
 
 	/// Get API keys
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] Result<std::vector<ApiKeyCredentials>> api_keys();
 
 	/// Delete current API key
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] VoidResult delete_api_key();
 
 	/// Create a limit order builder
@@ -219,52 +203,66 @@ public:
 	post_orders(const std::vector<SignedOrder>& orders);
 
 	/// Get an order by ID
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] Result<OpenOrderResponse> order(std::string_view order_id);
 
 	/// Get orders with filters
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] Result<PaginatedResponse<OpenOrderResponse>>
 	orders(const OrdersRequest& request = {}, std::optional<Cursor> cursor = std::nullopt);
 
 	/// Cancel an order by ID
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] Result<CancelOrdersResponse> cancel_order(std::string_view order_id);
 
 	/// Cancel multiple orders
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] Result<CancelOrdersResponse>
 	cancel_orders(const std::vector<std::string>& order_ids);
 
 	/// Cancel all orders
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] Result<CancelOrdersResponse> cancel_all_orders();
 
 	/// Cancel orders for a specific market
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] Result<CancelOrdersResponse>
 	cancel_market_orders(std::optional<Bytes32> market = std::nullopt,
 						 std::optional<uint256_t> asset_id = std::nullopt);
 
 	/// Get trades with filters
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] Result<PaginatedResponse<TradeResponse>>
 	trades(const TradesRequest& request = {}, std::optional<Cursor> cursor = std::nullopt);
 
 	/// Get balance and allowance
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] Result<BalanceAllowanceResponse>
 	balance_allowance(const BalanceAllowanceRequest& request = {});
 
 	/// Update allowance
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] VoidResult update_balance_allowance(const BalanceAllowanceRequest& request);
 
 	/// Get notifications
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] Result<std::vector<NotificationResponse>> notifications();
 
 	/// Delete notifications
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] VoidResult delete_notifications(const std::vector<std::string>& notification_ids);
 
 	/// Check if an order is scoring
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] Result<OrderScoringResponse> is_order_scoring(std::string_view order_id);
 
 	/// Check if orders are scoring
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] Result<std::vector<OrderScoringResponse>>
 	are_orders_scoring(const std::vector<std::string>& order_ids);
 
 	/// Check if in closed-only mode
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] Result<bool> closed_only_mode();
 
 	// =========================================================================
@@ -272,13 +270,16 @@ public:
 	// =========================================================================
 
 	/// Post heartbeat
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] Result<HeartbeatResponse>
 	post_heartbeat(std::optional<std::string> heartbeat_id = std::nullopt);
 
 	/// Get builder API keys
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] Result<std::vector<BuilderKeyCredentials>> builder_api_keys();
 
 	/// Revoke builder API key
+	/// Not implemented; returns an explicit validation error.
 	[[nodiscard]] VoidResult revoke_builder_api_key();
 
 	// =========================================================================

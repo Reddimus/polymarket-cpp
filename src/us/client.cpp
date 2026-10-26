@@ -1,3 +1,4 @@
+#include "../detail/json.hpp"
 /// @file us/client.cpp
 /// @brief Polymarket US API client implementation
 ///
@@ -11,16 +12,17 @@
 /// Two hosts: authed (api.polymarket.us) for orders/positions/etc.,
 /// public (gateway.polymarket.us) for discovery/books/settlement/candles.
 
-#include "polymarket/us/client.hpp"
-
 #include <chrono>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
+#include <locale>
 #include <sstream>
 
 #include "polymarket/crypto/ed25519.hpp"
 #include "polymarket/crypto/hmac.hpp" // base64_encode/decode helpers
 #include "polymarket/http/client.hpp"
+#include "polymarket/us/client.hpp"
 
 namespace polymarket::us {
 
@@ -50,7 +52,7 @@ void append_query(std::string& url, std::string_view key, std::string_view value
 	url += url.find('?') == std::string::npos ? '?' : '&';
 	url += key;
 	url += '=';
-	url += value;
+	url += http::url_encode(value);
 }
 
 void append_query(std::string& url, std::string_view key, bool value) {
@@ -93,7 +95,30 @@ std::optional<std::string> time_in_force_from_request(const std::optional<std::s
 		*tif == "TIME_IN_FORCE_IMMEDIATE_OR_CANCEL") {
 		return "TIME_IN_FORCE_IMMEDIATE_OR_CANCEL";
 	}
+	if (*tif == "day" || *tif == "TIME_IN_FORCE_DAY")
+		return "TIME_IN_FORCE_DAY";
+	if (*tif == "gtd" || *tif == "good_till_date" || *tif == "TIME_IN_FORCE_GOOD_TILL_DATE")
+		return "TIME_IN_FORCE_GOOD_TILL_DATE";
+	if (*tif == "fok" || *tif == "fill_or_kill" || *tif == "TIME_IN_FORCE_FILL_OR_KILL")
+		return "TIME_IN_FORCE_FILL_OR_KILL";
 	return std::nullopt;
+}
+
+Result<std::string> expiration_text(std::int64_t seconds) {
+	if (seconds < 0 || seconds > 253402300799LL)
+		return std::unexpected(Error::validation("Expiration must fit years 1970..9999"));
+	const std::chrono::sys_seconds time{std::chrono::seconds{seconds}};
+	const std::chrono::sys_days date = std::chrono::floor<std::chrono::days>(time);
+	const std::chrono::year_month_day calendar{date};
+	const std::chrono::hh_mm_ss clock{time - date};
+	std::ostringstream text;
+	text.imbue(std::locale::classic());
+	text << std::setfill('0') << std::setw(4) << static_cast<int>(calendar.year()) << '-'
+		 << std::setw(2) << static_cast<unsigned>(calendar.month()) << '-' << std::setw(2)
+		 << static_cast<unsigned>(calendar.day()) << 'T' << std::setw(2) << clock.hours().count()
+		 << ':' << std::setw(2) << clock.minutes().count() << ':' << std::setw(2)
+		 << clock.seconds().count() << 'Z';
+	return text.str();
 }
 
 } // namespace
@@ -203,6 +228,8 @@ Client::Client(Client&&) noexcept = default;
 Client& Client::operator=(Client&&) noexcept = default;
 
 Result<void> Client::set_credentials(Credentials creds) {
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	// Decode the base64 secret; expect 64 bytes (seed||pub).
 	Result<std::vector<std::uint8_t>> decoded = crypto::base64_decode(creds.secret_key);
 	if (!decoded.has_value()) {
@@ -229,6 +256,8 @@ Result<void> Client::set_credentials(Credentials creds) {
 // ----- Public Endpoints (gateway.polymarket.us) -----
 
 Result<std::string> Client::get_events(const EventFilter& filter) {
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	std::string path = "/v1/events";
 	if (filter.active)
 		append_query(path, "active", *filter.active);
@@ -240,12 +269,18 @@ Result<std::string> Client::get_events(const EventFilter& filter) {
 }
 
 Result<std::string> Client::get_event(std::string_view event_id) {
+	if (event_id.empty() || event_id == "." || event_id == "..")
+		return std::unexpected(Error::validation("Invalid path identifier"));
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	std::string path = "/v1/events/";
-	path.append(event_id);
+	path.append(http::url_encode(event_id));
 	return impl_->public_get(path);
 }
 
 Result<std::string> Client::get_markets(const MarketFilter& filter) {
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	std::string path = "/v1/markets";
 	if (filter.event_id)
 		append_query(path, "eventId", *filter.event_id);
@@ -269,64 +304,98 @@ Result<std::string> Client::get_markets(const MarketFilter& filter) {
 }
 
 Result<std::string> Client::get_market(std::string_view market_id) {
+	if (market_id.empty() || market_id == "." || market_id == "..")
+		return std::unexpected(Error::validation("Invalid path identifier"));
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	std::string path = "/v1/markets/";
-	path.append(market_id);
+	path.append(http::url_encode(market_id));
 	return impl_->public_get(path);
 }
 
 Result<std::string> Client::get_orderbook(std::string_view market_id) {
+	if (market_id.empty() || market_id == "." || market_id == "..")
+		return std::unexpected(Error::validation("Invalid path identifier"));
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	std::string path = "/v1/markets/";
-	path.append(market_id);
+	path.append(http::url_encode(market_id));
 	path.append("/book");
 	return impl_->public_get(path);
 }
 
 Result<std::string> Client::get_series() {
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	return impl_->public_get("/v1/series");
 }
 
 Result<std::string> Client::get_series_by_ticker(std::string_view ticker) {
+	if (ticker.empty() || ticker == "." || ticker == "..")
+		return std::unexpected(Error::validation("Invalid path identifier"));
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	std::string path = "/v1/series/";
-	path.append(ticker);
+	path.append(http::url_encode(ticker));
 	return impl_->public_get(path);
 }
 
 Result<std::string> Client::get_sports() {
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	return impl_->public_get("/v1/sports");
 }
 
 Result<std::string> Client::get_sport(std::string_view sport_id) {
+	if (sport_id.empty() || sport_id == "." || sport_id == "..")
+		return std::unexpected(Error::validation("Invalid path identifier"));
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	std::string path = "/v1/sports/";
-	path.append(sport_id);
+	path.append(http::url_encode(sport_id));
 	return impl_->public_get(path);
 }
 
 Result<std::string> Client::search(std::string_view query) {
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	std::string path = "/v1/search?q=";
-	path.append(query);
+	path.append(http::url_encode(query));
 	return impl_->public_get(path);
 }
 
 // ----- Tags / Settlement / Candles / Health -----
 
 Result<std::string> Client::get_tag_by_slug(std::string_view slug) {
+	if (slug.empty() || slug == "." || slug == "..")
+		return std::unexpected(Error::validation("Invalid path identifier"));
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	std::string path = "/v2/tags/slug/";
-	path.append(slug);
+	path.append(http::url_encode(slug));
 	return impl_->public_get(path);
 }
 
 Result<std::string> Client::get_tags() {
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	return impl_->public_get("/v2/tags");
 }
 
 Result<std::string> Client::get_settlement(std::string_view market_slug) {
+	if (market_slug.empty() || market_slug == "." || market_slug == "..")
+		return std::unexpected(Error::validation("Invalid path identifier"));
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	std::string path = "/v1/markets/";
-	path.append(market_slug);
+	path.append(http::url_encode(market_slug));
 	path.append("/settlement");
 	return impl_->public_get(path);
 }
 
 Result<std::string> Client::get_candles(const CandleRequest& req) {
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	// POST /v1beta1/report/trades/stats — verified 2026-05-02 to live
 	// on api.polymarket.us (the AUTHED host) and require Ed25519
 	// headers, NOT the public gateway. Calling on gateway returns
@@ -339,20 +408,28 @@ Result<std::string> Client::get_candles(const CandleRequest& req) {
 	// (startTimeMs / endTimeMs). Earlier snake_case attempts produced
 	// 404; the gateway/api routing was the actual issue, but we
 	// standardized on camelCase to match the documented schema.
-	std::ostringstream body;
-	body << "{" << R"("symbol":")" << req.symbol << "\"," << R"("startTimeMs":)"
-		 << req.start_time_ms << "," << R"("endTimeMs":)" << req.end_time_ms << ","
-		 << R"("interval":")" << req.interval << "\"" << "}";
-	return impl_->authed_request(http::Method::POST, "/v1beta1/report/trades/stats", body.str());
+	glz::generic_u64 body;
+	body["symbol"] = req.symbol;
+	body["startTimeMs"] = req.start_time_ms;
+	body["endTimeMs"] = req.end_time_ms;
+	body["interval"] = req.interval;
+	std::string serialized;
+	if (glz::write_json(body, serialized))
+		return std::unexpected(Error::parse("Cannot serialize candles request"));
+	return impl_->authed_request(http::Method::POST, "/v1beta1/report/trades/stats", serialized);
 }
 
 Result<std::string> Client::get_health() {
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	return impl_->public_get("/v1/health");
 }
 
 // ----- Authenticated Endpoints (api.polymarket.us) -----
 
 Result<std::string> Client::place_order(const OrderRequest& request) {
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	// Map caller-side aliases to the docs intent enum. Explicit short
 	// intents are required for NO-side market exposure; reject typos so
 	// a bad signal cannot silently degrade to a long order.
@@ -379,36 +456,62 @@ Result<std::string> Client::place_order(const OrderRequest& request) {
 	const std::optional<std::string> time_in_force =
 		time_in_force_from_request(request.time_in_force);
 	if (!time_in_force.has_value()) {
-		return std::unexpected(Error::validation(
-			"OrderRequest.time_in_force must be empty, 'gtc', 'good_till_cancel', "
-			"'ioc', 'immediate_or_cancel', or a supported TIME_IN_FORCE_* value (got: " +
-			*request.time_in_force + ")"));
+		return std::unexpected(Error::validation("Unsupported OrderRequest.time_in_force"));
 	}
 
-	std::ostringstream body;
-	body << "{" << R"("marketSlug":")" << request.market_id << "\"," << R"("intent":")" << *intent
-		 << R"(",)" << R"("type":")" << type_str << R"(",)" << R"("timeInForce":")"
-		 << *time_in_force << R"(",)" << R"("quantity":")" << request.size.to_string() << "\","
-		 << R"("price":")" << request.price.to_string() << "\"";
-	// post-only is "participateDontInitiate" per docs — emit only when
-	// explicitly requested, so the wire payload stays minimal otherwise.
-	if (request.post_only.value_or(false)) {
-		body << R"(,"participateDontInitiate":true)";
+	if (request.market_id.empty() || request.size.raw() <= 0)
+		return std::unexpected(
+			Error::validation("Order market and positive quantity are required"));
+	if ((request.type == "limit" || request.price.raw() != 0) &&
+		(request.price.raw() <= 0 || request.price >= Decimal("1")))
+		return std::unexpected(
+			Error::validation("Order price must be greater than zero and less than one"));
+	if (request.client_order_id && !request.client_order_id->empty())
+		return std::unexpected(
+			Error::validation("client_order_id is unsupported by the current US REST schema"));
+	std::string tif = *time_in_force;
+	if (request.expiration && (!request.time_in_force || request.time_in_force->empty()))
+		tif = "TIME_IN_FORCE_GOOD_TILL_DATE";
+	if (request.expiration.has_value() != (tif == "TIME_IN_FORCE_GOOD_TILL_DATE"))
+		return std::unexpected(Error::validation(
+			"Expiration and good-till-date time_in_force must be supplied together"));
+	glz::generic_u64 body;
+	body["marketSlug"] = request.market_id;
+	body["intent"] = *intent;
+	body["type"] = type_str;
+	body["tif"] = tif;
+	body["quantity"] = request.size.to_double();
+	if (request.type == "limit" || request.price.raw() != 0) {
+		glz::generic_u64 amount;
+		amount["value"] = request.price.to_string();
+		amount["currency"] = "USD";
+		body["price"] = std::move(amount);
 	}
-	if (request.client_order_id.has_value() && !request.client_order_id->empty()) {
-		body << R"(,"clientOrderId":")" << *request.client_order_id << "\"";
+	if (request.post_only)
+		body["participateDontInitiate"] = *request.post_only;
+	if (request.manual_order_indicator)
+		body["manualOrderIndicator"] = *request.manual_order_indicator
+										   ? "MANUAL_ORDER_INDICATOR_MANUAL"
+										   : "MANUAL_ORDER_INDICATOR_AUTOMATIC";
+	if (request.expiration) {
+		const Result<std::string> expiration = expiration_text(*request.expiration);
+		if (!expiration)
+			return std::unexpected(expiration.error());
+		body["goodTillTime"] = *expiration;
 	}
-	if (request.manual_order_indicator.has_value()) {
-		body << R"(,"manualOrderIndicator":)"
-			 << (*request.manual_order_indicator ? "true" : "false");
-	}
-	body << "}";
-	return impl_->authed_request(http::Method::POST, "/v1/orders", body.str());
+	std::string serialized;
+	if (glz::write_json(body, serialized))
+		return std::unexpected(Error::parse("Cannot serialize order request"));
+	return impl_->authed_request(http::Method::POST, "/v1/orders", serialized);
 }
 
 Result<void> Client::cancel_order(std::string_view order_id) {
+	if (order_id.empty() || order_id == "." || order_id == "..")
+		return std::unexpected(Error::validation("Invalid path identifier"));
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	std::string path = "/v1/order/";
-	path.append(order_id);
+	path.append(http::url_encode(order_id));
 	path.append("/cancel");
 	Result<std::string> r = impl_->authed_request(http::Method::POST, path, "");
 	if (!r.has_value())
@@ -417,6 +520,8 @@ Result<void> Client::cancel_order(std::string_view order_id) {
 }
 
 Result<std::string> Client::get_orders(const OrderFilter& filter) {
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	std::string path = "/v1/orders/open";
 	if (filter.market_id)
 		append_query(path, "marketSlug", *filter.market_id);
@@ -430,20 +535,30 @@ Result<std::string> Client::get_orders(const OrderFilter& filter) {
 }
 
 Result<std::string> Client::get_order_by_id(std::string_view order_id) {
+	if (order_id.empty() || order_id == "." || order_id == "..")
+		return std::unexpected(Error::validation("Invalid path identifier"));
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	std::string path = "/v1/order/";
-	path.append(order_id);
+	path.append(http::url_encode(order_id));
 	return impl_->authed_request(http::Method::GET, path, "");
 }
 
 Result<std::string> Client::get_positions() {
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	return impl_->authed_request(http::Method::GET, "/v1/portfolio/positions", "");
 }
 
 Result<std::string> Client::get_balance() {
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	return impl_->authed_request(http::Method::GET, "/v1/account/balances", "");
 }
 
 Result<std::string> Client::get_account() {
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	return impl_->authed_request(http::Method::GET, "/v1/account", "");
 }
 

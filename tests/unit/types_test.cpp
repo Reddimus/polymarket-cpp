@@ -3,6 +3,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+#include <limits>
+#include <stdexcept>
 
 #include "polymarket/core/types.hpp"
 
@@ -171,4 +173,41 @@ TEST_CASE("Decimal", "[types]") {
 		Decimal n("-1.5");
 		REQUIRE(n.to_uint64_scaled(6) == 0u);
 	}
+}
+
+TEST_CASE("Full-width uint256 and bounded hex parsing", "[types][regression]") {
+	const std::string maximum =
+		"115792089237316195423570985008687907853269984665640564039457584007913129639935";
+	REQUIRE(uint256_t::from_string(maximum).to_string() == maximum);
+	REQUIRE(uint256_t::from_hex("f").to_string() == "15");
+	REQUIRE(Address::from_hex("f").bytes.back() == 15);
+	REQUIRE_THROWS_AS(
+		uint256_t::from_string(
+			"115792089237316195423570985008687907853269984665640564039457584007913129639936"),
+		std::out_of_range);
+	REQUIRE_THROWS_AS(uint256_t::from_string("12x3"), std::invalid_argument);
+	REQUIRE_THROWS_AS(uint256_t::from_hex(std::string(65, 'f')), std::invalid_argument);
+	REQUIRE_THROWS_AS(Address::from_hex(std::string(41, 'f')), std::invalid_argument);
+}
+TEST_CASE("Decimal bounds, sign and checked arithmetic", "[types][regression]") {
+	REQUIRE(Decimal("-0.5").to_string() == "-0.5");
+	REQUIRE(Decimal("-9223372036854.775808").raw() == std::numeric_limits<std::int64_t>::min());
+	REQUIRE(Decimal("9223372036854.775807").raw() == std::numeric_limits<std::int64_t>::max());
+	REQUIRE_THROWS_AS(Decimal("9223372036854.775808"), std::out_of_range);
+	REQUIRE_THROWS_AS(Decimal("1x2"), std::invalid_argument);
+	REQUIRE_THROWS_AS(Decimal("1.2.3"), std::invalid_argument);
+	REQUIRE_THROWS_AS(Decimal::from_double(std::numeric_limits<double>::infinity()),
+					  std::out_of_range);
+	const Decimal maximum(std::numeric_limits<std::int64_t>::max());
+	const Decimal minimum(std::numeric_limits<std::int64_t>::min());
+	REQUIRE((maximum * Decimal::ONE).raw() == maximum.raw());
+	REQUIRE((minimum / Decimal::ONE).raw() == minimum.raw());
+	REQUIRE((Decimal("1000000") * Decimal("1000000")).to_string() == "1000000000000");
+	REQUIRE_THROWS_AS(maximum + Decimal(std::int64_t{1}), std::overflow_error);
+	REQUIRE_THROWS_AS(minimum - Decimal(std::int64_t{1}), std::overflow_error);
+	REQUIRE_THROWS_AS(maximum * Decimal("2"), std::overflow_error);
+	REQUIRE_THROWS_AS(minimum / Decimal("-1"), std::overflow_error);
+	REQUIRE_THROWS_AS(Decimal("1").to_uint64_scaled(std::numeric_limits<int>::max()),
+					  std::out_of_range);
+	REQUIRE_THROWS_AS(maximum.to_uint64_scaled(7), std::overflow_error);
 }

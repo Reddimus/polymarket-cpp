@@ -178,3 +178,20 @@ TEST_CASE("Salt generation", "[clob][order]") {
 		REQUIRE(salt <= IEEE754_MAX_SAFE);
 	}
 }
+
+TEST_CASE("Market orders reject zero amounts, invalid prices and overflow",
+		  "[clob][order][regression]") {
+	const Address signer = Address::from_hex("01");
+	for (const char* amount : {"0", "-1", "9223372036854.775807"}) {
+		auto builder = MarketOrderBuilder::create(signer, signer, SignatureType::EOA,
+												  TickSize::Hundredth, 0, false);
+		builder.token_id(uint256_t::from_uint64(1)).side(Side::Buy);
+		builder.amount_usdc(Decimal(amount)).price(Decimal("0.001"));
+		REQUIRE_FALSE(builder.build());
+	}
+	auto builder = MarketOrderBuilder::create(signer, signer, SignatureType::EOA,
+											  TickSize::Hundredth, 0, false);
+	builder.token_id(uint256_t::from_uint64(1)).side(Side::Buy);
+	builder.amount_usdc(Decimal("1")).price(Decimal("0"));
+	REQUIRE_FALSE(builder.build());
+}

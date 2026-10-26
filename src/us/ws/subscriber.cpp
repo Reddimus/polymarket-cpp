@@ -1,17 +1,9 @@
+#include "../../detail/callback_slot.hpp"
+#include "../../detail/json.hpp"
+#include "../../detail/ws_runtime.hpp"
 /// @file us/ws/subscriber.cpp
 /// @brief Implementation of polymarket::us::ws::Subscriber.
 ///
-/// Cribs the libwebsockets boilerplate from kalshi-cpp's
-/// `src/ws/websocket.cpp` (685 LOC, battle-tested) and adapts to
-/// Polymarket's auth + subscribe shape:
-///   - Ed25519 (seed||pub) instead of RSA-PSS
-///   - X-PM-Access-Key/Timestamp/Signature headers
-///   - {"subscribe":{"requestId":..., "subscriptionType":..., ...}} frame
-///   - passive heartbeat handling; the official SDK does not send
-///     unsolicited application heartbeat frames
-
-#include "polymarket/us/ws/subscriber.hpp"
-
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -25,6 +17,7 @@
 
 #include "polymarket/crypto/ed25519.hpp"
 #include "polymarket/crypto/hmac.hpp"
+#include "polymarket/us/ws/subscriber.hpp"
 
 namespace polymarket::us::ws {
 
@@ -58,7 +51,9 @@ std::string build_subscribe_frame(std::string_view subscription_type,
 	for (std::size_t i = 0; i < slugs.size(); ++i) {
 		if (i)
 			o << ',';
-		o << '"' << slugs[i] << '"';
+		std::string encoded;
+		(void)glz::write_json(slugs[i], encoded);
+		o << encoded;
 	}
 	o << R"(],"responsesDebounced":true}})";
 	return o.str();
@@ -74,8 +69,9 @@ struct Impl;
 static int subscriber_callback(struct lws* wsi, enum lws_callback_reasons reason, void* user,
 							   void* in, std::size_t len);
 
-struct Subscriber::Impl {
+struct Subscriber::Impl : detail::WsRuntime {
 	SubscriberConfig cfg;
+	std::string receive_buffer;
 	crypto::Ed25519PrivateKey signing_key;
 
 	// Pre-computed handshake auth headers — the upgrade fires once at
@@ -84,11 +80,6 @@ struct Subscriber::Impl {
 	std::string auth_sig;
 
 	// Connection state.
-	struct lws_context* context = nullptr;
-	struct lws* wsi = nullptr;
-	std::thread service_thread;
-	std::atomic<bool> connected{false};
-	std::atomic<bool> should_stop{false};
 
 	// Outbound queue. lws_write must be called from the service thread
 	// in response to a writable callback, so subscribe/heartbeat enqueue
@@ -96,8 +87,8 @@ struct Subscriber::Impl {
 	std::mutex send_mutex;
 	std::deque<std::string> send_queue;
 
-	OnMessage message_cb;
-	OnStateChange state_cb;
+	detail::CallbackSlot<void(std::string_view)> message_cb;
+	detail::CallbackSlot<void(bool)> state_cb;
 
 	// signing_key is set in configure(); this placeholder is a 32-byte
 	// zero seed (a valid Ed25519 seed shape — the resulting key is
@@ -111,8 +102,7 @@ struct Subscriber::Impl {
 			std::lock_guard<std::mutex> g(send_mutex);
 			send_queue.push_back(std::move(frame));
 		}
-		if (wsi)
-			lws_callback_on_writable(wsi);
+		wake();
 	}
 
 	/// Compute fresh handshake-time auth (called on every connect so
@@ -132,87 +122,99 @@ struct Subscriber::Impl {
 
 static int subscriber_callback(struct lws* wsi, enum lws_callback_reasons reason, void* user,
 							   void* in, std::size_t len) {
-	auto* impl = static_cast<Subscriber::Impl*>(lws_context_user(lws_get_context(wsi)));
-	(void)user;
+	try {
+		auto* impl = static_cast<Subscriber::Impl*>(lws_context_user(lws_get_context(wsi)));
+		(void)user;
 
-	switch (reason) {
-		case LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER: {
-			auto** p = reinterpret_cast<unsigned char**>(in);
-			auto* end = (*p) + len;
-			auto add = [&](const char* name, const std::string& value) -> bool {
-				return lws_add_http_header_by_name(
-						   wsi, reinterpret_cast<const unsigned char*>(name),
-						   reinterpret_cast<const unsigned char*>(value.c_str()),
-						   static_cast<int>(value.size()), p, end) == 0;
-			};
-			if (!add("X-PM-Access-Key:", impl->cfg.key_id) ||
-				!add("X-PM-Timestamp:", impl->auth_ts) || !add("X-PM-Signature:", impl->auth_sig)) {
-				std::cerr << "[ws] failed to add auth headers (buffer full)\n";
+		switch (reason) {
+			case LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER: {
+				auto** p = reinterpret_cast<unsigned char**>(in);
+				auto* end = (*p) + len;
+				auto add = [&](const char* name, const std::string& value) -> bool {
+					return lws_add_http_header_by_name(
+							   wsi, reinterpret_cast<const unsigned char*>(name),
+							   reinterpret_cast<const unsigned char*>(value.c_str()),
+							   static_cast<int>(value.size()), p, end) == 0;
+				};
+				if (!add("X-PM-Access-Key:", impl->cfg.key_id) ||
+					!add("X-PM-Timestamp:", impl->auth_ts) ||
+					!add("X-PM-Signature:", impl->auth_sig)) {
+					std::cerr << "[ws] failed to add auth headers (buffer full)\n";
+					return -1;
+				}
+				return 0;
+			}
+
+			case LWS_CALLBACK_CLIENT_ESTABLISHED: {
+				impl->connected.store(true, std::memory_order_release);
+				if (impl->state_cb)
+					impl->state_cb(true);
+				return 0;
+			}
+
+			case LWS_CALLBACK_CLIENT_RECEIVE: {
+				if (in && len) {
+					if (len > kMaxFrameSize - impl->receive_buffer.size())
+						return -1;
+					impl->receive_buffer.append(static_cast<const char*>(in), len);
+					if (lws_is_final_fragment(wsi) && !lws_remaining_packet_payload(wsi)) {
+						const std::string message = std::exchange(impl->receive_buffer, {});
+						impl->message_cb(message);
+					}
+				}
+				return 0;
+			}
+
+			case LWS_CALLBACK_CLIENT_WRITEABLE: {
+				std::string frame;
+				{
+					std::lock_guard<std::mutex> g(impl->send_mutex);
+					if (impl->send_queue.empty())
+						return 0;
+					frame = std::move(impl->send_queue.front());
+					impl->send_queue.pop_front();
+				}
+				// libwebsockets requires LWS_PRE bytes of pre-padding for headers.
+				std::vector<unsigned char> buf(LWS_PRE + frame.size());
+				std::memcpy(buf.data() + LWS_PRE, frame.data(), frame.size());
+				int written = lws_write(wsi, buf.data() + LWS_PRE, frame.size(), LWS_WRITE_TEXT);
+				if (written < 0 || static_cast<std::size_t>(written) != frame.size()) {
+					std::cerr << "[ws] lws_write failed: " << written << '\n';
+					return -1;
+				}
+				// Re-arm if more queued.
+				{
+					std::lock_guard<std::mutex> g(impl->send_mutex);
+					if (!impl->send_queue.empty())
+						lws_callback_on_writable(wsi);
+				}
+				return 0;
+			}
+
+			case LWS_CALLBACK_CLIENT_CONNECTION_ERROR: {
+				const char* err = in ? static_cast<const char*>(in) : "(no detail)";
+				std::cerr << "[ws] connection error: " << std::string(err, len) << '\n';
+				impl->connected.store(false, std::memory_order_release);
+				impl->should_stop.store(true, std::memory_order_release);
+				if (impl->state_cb)
+					impl->state_cb(false);
 				return -1;
 			}
-			return 0;
-		}
 
-		case LWS_CALLBACK_CLIENT_ESTABLISHED: {
-			impl->connected.store(true, std::memory_order_release);
-			if (impl->state_cb)
-				impl->state_cb(true);
-			return 0;
-		}
-
-		case LWS_CALLBACK_CLIENT_RECEIVE: {
-			if (in && len) {
-				const auto* bytes = static_cast<const char*>(in);
-				if (impl->message_cb)
-					impl->message_cb(std::string_view(bytes, len));
+			case LWS_CALLBACK_CLIENT_CLOSED: {
+				impl->connected.store(false, std::memory_order_release);
+				impl->should_stop.store(true, std::memory_order_release);
+				if (impl->state_cb)
+					impl->state_cb(false);
+				return 0;
 			}
-			return 0;
+
+			default:
+				return 0;
 		}
 
-		case LWS_CALLBACK_CLIENT_WRITEABLE: {
-			std::string frame;
-			{
-				std::lock_guard<std::mutex> g(impl->send_mutex);
-				if (impl->send_queue.empty())
-					return 0;
-				frame = std::move(impl->send_queue.front());
-				impl->send_queue.pop_front();
-			}
-			// libwebsockets requires LWS_PRE bytes of pre-padding for headers.
-			std::vector<unsigned char> buf(LWS_PRE + frame.size());
-			std::memcpy(buf.data() + LWS_PRE, frame.data(), frame.size());
-			int written = lws_write(wsi, buf.data() + LWS_PRE, frame.size(), LWS_WRITE_TEXT);
-			if (written < 0) {
-				std::cerr << "[ws] lws_write failed: " << written << '\n';
-				return -1;
-			}
-			// Re-arm if more queued.
-			{
-				std::lock_guard<std::mutex> g(impl->send_mutex);
-				if (!impl->send_queue.empty())
-					lws_callback_on_writable(wsi);
-			}
-			return 0;
-		}
-
-		case LWS_CALLBACK_CLIENT_CONNECTION_ERROR: {
-			const char* err = in ? static_cast<const char*>(in) : "(no detail)";
-			std::cerr << "[ws] connection error: " << std::string(err, len) << '\n';
-			impl->connected.store(false, std::memory_order_release);
-			if (impl->state_cb)
-				impl->state_cb(false);
-			return -1;
-		}
-
-		case LWS_CALLBACK_CLIENT_CLOSED: {
-			impl->connected.store(false, std::memory_order_release);
-			if (impl->state_cb)
-				impl->state_cb(false);
-			return 0;
-		}
-
-		default:
-			return 0;
+	} catch (...) {
+		return -1;
 	}
 }
 
@@ -222,14 +224,26 @@ static const struct lws_protocols kProtocols[] = {
 
 // ─── Subscriber ────────────────────────────────────────────────────
 
-Subscriber::Subscriber() : impl_(std::make_unique<Impl>()) {}
+Subscriber::Subscriber() : impl_(std::make_shared<Impl>()) {}
 Subscriber::~Subscriber() {
 	disconnect();
 }
 Subscriber::Subscriber(Subscriber&&) noexcept = default;
-Subscriber& Subscriber::operator=(Subscriber&&) noexcept = default;
+Subscriber& Subscriber::operator=(Subscriber&& other) noexcept {
+	if (this != &other) {
+		disconnect();
+		impl_ = std::move(other.impl_);
+	}
+	return *this;
+}
 
 Result<void> Subscriber::configure(SubscriberConfig cfg) {
+	if (!impl_ || impl_->worker_running.load(std::memory_order_acquire))
+		return std::unexpected(Error::validation("Configure requires an idle client"));
+	if (cfg.key_id.empty() || cfg.host.empty() || cfg.port < 1 || cfg.port > 65535 ||
+		cfg.key_id.find_first_of(std::string_view{"\r\n\0", 3}) != std::string::npos ||
+		cfg.host.find_first_of(std::string_view{" \t\r\n\0", 5}) != std::string::npos)
+		return std::unexpected(Error::validation("Invalid WebSocket key, host, or port"));
 	// Decode + validate the secret (same path as REST Client).
 	auto decoded = crypto::base64_decode(cfg.secret_key);
 	if (!decoded.has_value())
@@ -250,7 +264,10 @@ Result<void> Subscriber::configure(SubscriberConfig cfg) {
 }
 
 Result<void> Subscriber::connect() {
-	if (impl_->cfg.key_id.empty())
+	const std::shared_ptr<Impl> state = impl_;
+	if (!state)
+		return std::unexpected(Error::validation("Client moved-from"));
+	if (state->cfg.key_id.empty())
 		return std::unexpected(Error::validation("call configure() before connect()"));
 
 	// Idempotent: tear down any prior context + service thread before
@@ -258,81 +275,85 @@ Result<void> Subscriber::connect() {
 	// disconnect (e.g. 502 from the upstream) would move-assign a new
 	// std::thread over a still-joinable service thread, calling
 	// std::terminate() and crashing the process.
-	disconnect();
+	state->stop();
+	if (state->worker_running.load(std::memory_order_acquire))
+		return std::unexpected(Error::network("Previous worker is stopping"));
+	if (!detail::keep_tls_initialized())
+		return std::unexpected(Error::network("TLS initialization failed"));
+	detail::RetiredThreads::instance().reap();
+	state->should_stop.store(false, std::memory_order_release);
+	{
+		const std::lock_guard lock(state->send_mutex);
+		state->send_queue.clear();
+	}
+	state->receive_buffer.clear();
 
-	if (auto rc = impl_->refresh_auth(); !rc.has_value())
+	if (auto rc = state->refresh_auth(); !rc.has_value())
 		return std::unexpected(rc.error());
 
 	struct lws_context_creation_info ctx_info {};
 	std::memset(&ctx_info, 0, sizeof(ctx_info));
 	ctx_info.port = CONTEXT_PORT_NO_LISTEN;
 	ctx_info.protocols = kProtocols;
-	ctx_info.user = impl_.get();
+	ctx_info.user = state.get();
 	ctx_info.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;
 
-	impl_->context = lws_create_context(&ctx_info);
-	if (!impl_->context)
+	state->context = lws_create_context(&ctx_info);
+	if (!state->context)
 		return std::unexpected(Error::network("lws_create_context failed"));
 
 	struct lws_client_connect_info ci {};
 	std::memset(&ci, 0, sizeof(ci));
-	ci.context = impl_->context;
-	ci.address = impl_->cfg.host.c_str();
-	ci.port = 443;
+	ci.context = state->context;
+	ci.address = state->cfg.host.c_str();
+	ci.port = state->cfg.port;
 	ci.path = "/v1/ws/markets";
-	ci.host = impl_->cfg.host.c_str();
-	ci.origin = impl_->cfg.host.c_str();
+	ci.host = state->cfg.host.c_str();
+	ci.origin = state->cfg.host.c_str();
 	ci.protocol = kProtocols[0].name;
-	ci.ssl_connection = LCCSCF_USE_SSL;
+	ci.ssl_connection = state->cfg.use_tls ? LCCSCF_USE_SSL : 0;
 
-	impl_->wsi = lws_client_connect_via_info(&ci);
-	if (!impl_->wsi) {
-		lws_context_destroy(impl_->context);
-		impl_->context = nullptr;
+	state->wsi = lws_client_connect_via_info(&ci);
+	if (!state->wsi) {
+		state->release_context();
 		return std::unexpected(Error::network("lws_client_connect_via_info failed"));
 	}
 
-	// Service thread: pumps libwebsockets. Do not send unsolicited
-	// application heartbeat frames here: Polymarket's official SDK only
-	// listens for inbound heartbeat events, and production observed
-	// `{"heartbeat":{}}` client frames being answered with
-	// `{"error":"invalid_message"}` every 30 seconds.
-	impl_->should_stop.store(false, std::memory_order_release);
-	impl_->service_thread = std::thread([impl = impl_.get()]() {
-		while (!impl->should_stop.load(std::memory_order_acquire) && impl->context) {
-			lws_service(impl->context, 50);
-		}
-	});
+	if (state->should_stop.load(std::memory_order_acquire)) {
+		state->release_context();
+		return std::unexpected(Error::network("Disconnected while connecting"));
+	}
+	try {
+		state->start(state, [](Impl& impl) {
+			const std::lock_guard lock(impl.send_mutex);
+			if (!impl.send_queue.empty() && impl.wsi)
+				lws_callback_on_writable(impl.wsi);
+		});
+
+	} catch (const std::exception& error) {
+		state->release_context();
+		return std::unexpected(Error::network(error.what()));
+	}
 
 	// Wait briefly for the upgrade to complete.
 	const auto start = std::chrono::steady_clock::now();
-	while (!impl_->connected.load(std::memory_order_acquire) &&
-		   !impl_->should_stop.load(std::memory_order_acquire)) {
+	while (!state->connected.load(std::memory_order_acquire) &&
+		   !state->should_stop.load(std::memory_order_acquire)) {
 		if (std::chrono::steady_clock::now() - start > std::chrono::seconds(10)) {
-			disconnect();
+			state->stop();
 			return std::unexpected(Error::network("WS upgrade timed out after 10s"));
 		}
 		std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	}
+	if (!state->connected.load(std::memory_order_acquire))
+		return std::unexpected(Error::network("WebSocket closed during handshake"));
 	return {};
 }
 
 void Subscriber::disconnect() {
-	// Defensive: the destructor calls disconnect(), but the defaulted
-	// move ctor/assign leave impl_ nullptr in the moved-from object.
-	// Without this guard the moved-from destructor would dereference a
-	// null unique_ptr and crash. The same guard makes is_connected()
-	// safe to call on a moved-from Subscriber.
-	if (!impl_)
-		return;
-	impl_->should_stop.store(true, std::memory_order_release);
-	impl_->connected.store(false, std::memory_order_release);
-	if (impl_->service_thread.joinable())
-		impl_->service_thread.join();
-	if (impl_->context) {
-		lws_context_destroy(impl_->context);
-		impl_->context = nullptr;
-		impl_->wsi = nullptr;
+	const std::shared_ptr<Impl> state = impl_;
+	if (state) {
+		state->stop();
 	}
 }
 
@@ -381,10 +402,12 @@ Result<void> Subscriber::subscribe_trades(const std::vector<std::string>& market
 }
 
 void Subscriber::on_message(OnMessage cb) {
-	impl_->message_cb = std::move(cb);
+	if (impl_)
+		impl_->message_cb = std::move(cb);
 }
 void Subscriber::on_state_change(OnStateChange cb) {
-	impl_->state_cb = std::move(cb);
+	if (impl_)
+		impl_->state_cb = std::move(cb);
 }
 
 } // namespace polymarket::us::ws

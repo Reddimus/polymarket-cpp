@@ -17,15 +17,7 @@
 
 namespace polymarket::http {
 
-/// HTTP method.
-///
-/// Note: ``DEL`` (not ``DELETE``) is the enumerator for the wire
-/// verb ``"DELETE"``. ``<windows.h>`` defines ``DELETE`` as a macro
-/// for an access-rights constant (``0x00010000L``); any indirect
-/// inclusion via libcurl/MSVC headers makes ``Method::DELETE``
-/// expand to ``Method::0x00010000L`` and the build dies with
-/// C2589/C2059. ``method_to_string`` still emits ``"DELETE"`` so
-/// the wire protocol is unchanged.
+/// HTTP method; DEL avoids the Windows DELETE macro.
 enum class Method { GET, POST, PUT, DEL, PATCH };
 
 /// Convert method to string
@@ -58,7 +50,7 @@ struct Response {
 	[[nodiscard]] bool is_client_error() const { return status_code >= 400 && status_code < 500; }
 
 	/// Check if response indicates server error (5xx)
-	[[nodiscard]] bool is_server_error() const { return status_code >= 500; }
+	[[nodiscard]] bool is_server_error() const { return status_code >= 500 && status_code < 600; }
 
 	/// Check if response indicates rate limiting (429)
 	[[nodiscard]] bool is_rate_limited() const { return status_code == 429; }
@@ -70,7 +62,8 @@ struct Request {
 	std::string url;
 	std::map<std::string, std::string> headers;
 	std::string body;
-	std::chrono::milliseconds timeout{30000};
+	/// Zero inherits ClientConfig::default_timeout.
+	std::chrono::milliseconds timeout{0};
 
 	/// Add a header
 	Request& header(std::string_view name, std::string_view value) {
@@ -121,16 +114,18 @@ struct ClientConfig {
 	std::optional<std::string> proxy_url;
 	std::optional<std::string> proxy_username;
 	std::optional<std::string> proxy_password;
-	std::string user_agent{"polymarket-cpp/0.1.0"};
+	std::string user_agent{"polymarket-cpp/0.5.0"};
+	/// Decompressed body limit; zero disables it.
+	std::size_t max_response_bytes{64 * 1024 * 1024};
 };
 
-/// HTTP client using libcurl
+/// Libcurl client. Externally synchronize concurrent use.
 class Client {
 public:
-	/// Initialize the global curl context (call once at program start)
+	/// Optional eager initialization; clients initialize automatically.
 	static void global_init();
 
-	/// Cleanup the global curl context (call once at program end)
+	/// Compatibility no-op; the runtime outlives all clients.
 	static void global_cleanup();
 
 	/// Create a new HTTP client

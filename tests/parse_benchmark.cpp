@@ -160,7 +160,7 @@ std::size_t parse_one(const std::string& payload, std::string& err_out) {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
 	const std::string payload = make_payload();
 	constexpr int kIterations = 1000;
 	constexpr std::size_t kExpectedLevelsPerParse = 400; // 200 bids + 200 asks
@@ -199,16 +199,9 @@ int main() {
 				kIterations, kExpectedLevelsPerParse);
 	std::printf("  glaze: %8.3f ms total  (%8.3f us/op)\n", glaze_ms, us_per_op);
 
-	// Regression guard: at migration time, Glaze parsed this payload
-	// at ~290 us/op median on x86_64-v3. Cap at 1000 us/op — that's
-	// still 2x faster than the nlohmann baseline's worst case
-	// (~750 us/op) and leaves a generous slack window for slower CI
-	// runners (macOS arm64 ≈ 2-3x slower than the x86_64-v3 dev box)
-	// and Debug builds. A genuine algorithmic regression (e.g., the
-	// dispatch falling back to a quadratic path) would blow past
-	// 1000 us/op by orders of magnitude.
+	// Coarse optimized-build regression cap; Debug/sanitizer runs skip timing.
 	constexpr double kMaxUsPerOp = 1000.0;
-	if (us_per_op > kMaxUsPerOp) {
+	if (!(argc == 2 && std::string_view(argv[1]) == "--no-timing") && us_per_op > kMaxUsPerOp) {
 		std::fprintf(stderr, "REGRESSION: %.3f us/op exceeds cap of %.0f us/op\n", us_per_op,
 					 kMaxUsPerOp);
 		return 1;

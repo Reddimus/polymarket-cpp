@@ -65,34 +65,19 @@ struct OrderRequest {
 	Decimal price;	  ///< Price (for limit orders)
 	Decimal size;	  ///< Size in shares
 	std::optional<bool> post_only;
-	std::optional<int64_t> expiration;
-	/// Optional docs enum or short alias:
-	/// "gtc"/"good_till_cancel", "ioc"/"immediate_or_cancel",
-	/// or explicit TIME_IN_FORCE_* value. Defaults to GTC.
+	std::optional<int64_t>
+		expiration; ///< Unix seconds; selects GTD unless time_in_force is explicit.
+	/// day/gtc/gtd/ioc/fok or corresponding TIME_IN_FORCE_* enum; GTC defaults.
 	std::optional<std::string> time_in_force;
-	std::optional<std::string> client_order_id;
+	std::optional<std::string> client_order_id; ///< Reserved; nonempty values fail explicitly.
 	std::optional<bool> manual_order_indicator;
 };
 
-/// Polymarket US API client
-///
-/// The Polymarket US API is the CFTC-regulated US event-trading platform.
-/// Uses Ed25519 authentication instead of EIP-712 (which the offshore
-/// CLOB uses).
-///
-/// Two hosts:
-/// - Authed (orders, positions, balances, activities):
-///   https://api.polymarket.us
-/// - Public (markets, books, settlement, tags, candles):
-///   https://gateway.polymarket.us
-///
-/// Auth (verified against docs.polymarket.us 2026-05-02):
-/// - Headers: X-PM-Access-Key, X-PM-Timestamp (unix ms),
-///   X-PM-Signature (base64 Ed25519 sig)
-/// - Canonical message: f"{timestamp}{method}{path}" (no separators,
-///   body NOT signed). Tolerance ±30s.
-/// - Secret format: base64-decoded yields 64 bytes (seed||pub);
-///   first 32 bytes is the Ed25519 seed.
+/// Selected Polymarket US REST methods; see README for coverage.
+/// Public reads use gateway.polymarket.us; account methods and candles use
+/// api.polymarket.us. Authentication signs timestamp + method + path (no query
+/// or body) using the first 32 bytes of the base64-decoded 64-byte secret.
+/// Responses are returned as JSON text. Externally serialize client operations.
 class Client {
 public:
 	/// Default authed host
@@ -162,14 +147,13 @@ public:
 	/// List all tags.
 	[[nodiscard]] Result<std::string> get_tags();
 
-	// ----- Settlement + Candles (gateway.polymarket.us) -----
+	// ----- Settlement and Candles -----
 
 	/// Settlement lookup for a market that has resolved.
 	[[nodiscard]] Result<std::string> get_settlement(std::string_view market_slug);
 
 	/// Historical OHLCV via POST /v1beta1/report/trades/stats.
-	/// Body shape per docs.polymarket.us:
-	///   {symbol, start_time, end_time, interval}
+	/// Uses the authenticated host with startTimeMs/endTimeMs.
 	[[nodiscard]] Result<std::string> get_candles(const CandleRequest& req);
 
 	/// Health probe — GET /v1/health on the public host.
@@ -186,10 +170,7 @@ public:
 	/// List orders
 	[[nodiscard]] Result<std::string> get_orders(const OrderFilter& filter = {});
 
-	/// Get a single order by id. Used by trader-side reconciliation to
-	/// poll an open order's status (e.g. live_pending → live_filled).
-	/// Endpoint: GET /v1/order/{order_id} — mirrors cancel_order's
-	/// singular path. Returns the JSON body verbatim.
+	/// Get one order as JSON: GET /v1/order/{order_id}.
 	[[nodiscard]] Result<std::string> get_order_by_id(std::string_view order_id);
 
 	/// Get positions

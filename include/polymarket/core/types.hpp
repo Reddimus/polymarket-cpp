@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdint>
 #include <iomanip>
+#include <locale>
 #include <span>
 #include <sstream>
 #include <string>
@@ -57,6 +58,7 @@ struct uint256_t {
 	/// Convert to hex string (with 0x prefix)
 	[[nodiscard]] std::string to_hex() const {
 		std::ostringstream oss;
+		oss.imbue(std::locale::classic());
 		oss << "0x";
 		for (auto b : bytes) {
 			oss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(b);
@@ -95,6 +97,7 @@ struct Address {
 	/// Convert to lowercase hex (with 0x prefix)
 	[[nodiscard]] std::string to_hex() const {
 		std::ostringstream oss;
+		oss.imbue(std::locale::classic());
 		oss << "0x";
 		for (auto b : bytes) {
 			oss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(b);
@@ -133,6 +136,7 @@ struct Bytes32 {
 	/// Convert to hex string (with 0x prefix)
 	[[nodiscard]] std::string to_hex() const {
 		std::ostringstream oss;
+		oss.imbue(std::locale::classic());
 		oss << "0x";
 		for (auto b : bytes) {
 			oss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(b);
@@ -156,14 +160,14 @@ public:
 	/// Construct from raw scaled value
 	explicit constexpr Decimal(std::int64_t raw) noexcept : value_(raw) {}
 
-	/// Construct from string like "123.456"
+	/// Parse signed decimal text; invalid/overflow input throws. Extra fractional digits truncate.
 	explicit Decimal(std::string_view s) : Decimal(from_string(s)) {}
 	explicit Decimal(const char* s) : Decimal(std::string_view(s)) {}
 
 	/// Construct from double (will truncate to 6 decimal places)
-	static Decimal from_double(double d) { return Decimal(static_cast<std::int64_t>(d * SCALE)); }
+	static Decimal from_double(double d);
 
-	/// Construct from string like "123.456"
+	/// Parse signed decimal text; invalid/overflow input throws. Extra fractional digits truncate.
 	static Decimal from_string(std::string_view s);
 
 	/// Get raw scaled value
@@ -185,6 +189,9 @@ public:
 		}
 
 		std::ostringstream oss;
+		oss.imbue(std::locale::classic());
+		if (value_ < 0 && integer == 0)
+			oss << '-';
 		oss << integer << "." << std::setw(DECIMALS) << std::setfill('0') << fraction;
 		std::string result = oss.str();
 
@@ -202,23 +209,11 @@ public:
 	/// Check if negative
 	[[nodiscard]] constexpr bool is_negative() const noexcept { return value_ < 0; }
 
-	// Arithmetic operators
-	Decimal operator+(const Decimal& other) const { return Decimal(value_ + other.value_); }
-	Decimal operator-(const Decimal& other) const { return Decimal(value_ - other.value_); }
-	Decimal operator*(const Decimal& other) const {
-		// Avoid overflow by dividing after multiplication
-		return Decimal((value_ * other.value_) / SCALE);
-	}
-	Decimal operator/(const Decimal& other) const {
-		// Guard division by zero: integer division by 0 is undefined behavior
-		// (SIGFPE on most targets). No-exceptions house style → return zero
-		// rather than throw; callers that care must check the divisor's
-		// is_zero() first.
-		if (other.value_ == 0) {
-			return Decimal(static_cast<std::int64_t>(0));
-		}
-		return Decimal((value_ * SCALE) / other.value_);
-	}
+	// Checked arithmetic; overflow throws. Division by zero retains the legacy zero result.
+	Decimal operator+(const Decimal& other) const;
+	Decimal operator-(const Decimal& other) const;
+	Decimal operator*(const Decimal& other) const;
+	Decimal operator/(const Decimal& other) const;
 
 	// Comparison operators
 	bool operator==(const Decimal& other) const = default;
@@ -226,32 +221,7 @@ public:
 
 	/// Convert to uint64 with specified decimal places
 	/// e.g., to_uint64_scaled(6) converts 1.5 to 1500000
-	[[nodiscard]] std::uint64_t to_uint64_scaled(int decimals) const {
-		// A negative fixed-point value has no uint64 representation; casting it
-		// wraps to a huge bogus magnitude (e.g. a monstrous order amount on the
-		// wire). Clamp to 0 — the safe degenerate for the order size/price
-		// callers (a negative size/price is a caller error, not a real order).
-		if (value_ < 0) {
-			return 0;
-		}
-		if (decimals == DECIMALS) {
-			return static_cast<std::uint64_t>(value_);
-		} else if (decimals > DECIMALS) {
-			// Scale up
-			int diff = decimals - DECIMALS;
-			std::int64_t multiplier = 1;
-			for (int i = 0; i < diff; ++i)
-				multiplier *= 10;
-			return static_cast<std::uint64_t>(value_ * multiplier);
-		} else {
-			// Scale down
-			int diff = DECIMALS - decimals;
-			std::int64_t divisor = 1;
-			for (int i = 0; i < diff; ++i)
-				divisor *= 10;
-			return static_cast<std::uint64_t>(value_ / divisor);
-		}
-	}
+	[[nodiscard]] std::uint64_t to_uint64_scaled(int decimals) const;
 
 	// Constants
 	static const Decimal ZERO;

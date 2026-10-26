@@ -4,9 +4,9 @@
 /// @brief Polymarket C++ SDK version information
 
 #define POLYMARKET_VERSION_MAJOR 0
-#define POLYMARKET_VERSION_MINOR 1
-#define POLYMARKET_VERSION_PATCH 2
-#define POLYMARKET_VERSION_STRING "0.1.2"
+#define POLYMARKET_VERSION_MINOR 5
+#define POLYMARKET_VERSION_PATCH 0
+#define POLYMARKET_VERSION_STRING "0.5.0"
 
 namespace polymarket {
 

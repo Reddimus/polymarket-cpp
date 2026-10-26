@@ -1,41 +1,11 @@
+#include "../detail/callback_slot.hpp"
+#include "../detail/json.hpp"
+#include "../detail/ws_runtime.hpp"
 /// @file websocket.cpp
-/// @brief CLOB WebSocket client implementation (offshore CLOB endpoint).
-///
-/// Connects to ``wss://ws-subscriptions-clob.polymarket.com/ws/`` and
-/// emits typed messages on the supplied callback.
-///
-/// Cribs the libwebsockets event-loop + send-queue plumbing from
-/// ``src/us/ws/subscriber.cpp`` (the production-shipping US-gateway
-/// subscriber). The transport layer is identical; what differs is:
-///
-///   - URL path: ``/ws/`` for the offshore CLOB (vs ``/v1/ws/markets``)
-///   - Auth: optional HMAC-SHA256 + L2 headers for the user channel
-///     (vs Ed25519 for the US gateway)
-///   - Subscribe frame: ``{"type":"market","assets_ids":[...]}`` /
-///     ``{"type":"user","markets":[...]}``
-///   - Inbound parsing: dispatch onto the WsMessage variant (one
-///     case per ``event_type`` field — book snapshots, deltas, price
-///     changes, trades, fills, cancels)
-///
-/// The variant-based message dispatch handles the most common
-/// ``event_type`` values; an unknown type is logged via the error
-/// callback but does not tear down the connection. Parsing uses
-/// Glaze's `glz::generic` AST: the message shape is dynamic-per-type
-/// (different ``event_type`` values yield different field sets), so we
-/// parse once into the generic AST and walk it. Migrated from
-/// nlohmann/json on 2026-05-11.
-
-#include "polymarket/clob/websocket.hpp"
-
-#include "polymarket/core/error.hpp"
-#include "polymarket/crypto/hmac.hpp"
-
-namespace polymarket::clob {
-using polymarket::crypto::generate_l2_signature;
-}
-
+/// @brief CLOB market/user WebSockets sharing the private lifecycle runtime.
 #include <algorithm>
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <cstring>
 #include <deque>
@@ -45,73 +15,80 @@ using polymarket::crypto::generate_l2_signature;
 #include <libwebsockets.h>
 #include <mutex>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
+
+#include "polymarket/clob/websocket.hpp"
+#include "polymarket/core/error.hpp"
 
 namespace polymarket::clob {
 
 namespace {
 
-using glz_node = glz::generic;
+using glz_node = glz::generic_u64;
 
 constexpr std::size_t kMaxFrameSize = 1 << 20; // 1 MiB
 constexpr const char* kClobProtocolName = "polymarket-clob-ws";
-
-std::string now_unix_ms() {
-	const auto now = std::chrono::system_clock::now().time_since_epoch();
-	return std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
-}
 
 /// Tokenize the ``wss://host[:port]/path`` form into its three pieces.
 struct ParsedUrl {
 	std::string host;
 	int port = 443;
-	std::string path = "/ws/";
+	std::string path = "/ws/market";
 	bool ssl = true;
 };
 
 ParsedUrl parse_url(std::string_view url) {
-	ParsedUrl r;
-	std::string_view rest = url;
-	if (rest.starts_with("wss://")) {
-		r.ssl = true;
-		rest.remove_prefix(6);
-	} else if (rest.starts_with("ws://")) {
-		r.ssl = false;
-		r.port = 80;
-		rest.remove_prefix(5);
-	}
-	const auto slash = rest.find('/');
-	std::string_view host_port = rest.substr(0, slash);
-	if (slash != std::string_view::npos) {
-		r.path = std::string(rest.substr(slash));
-	}
-	const auto colon = host_port.find(':');
-	if (colon != std::string_view::npos) {
-		r.host = std::string(host_port.substr(0, colon));
-		auto port_sv = host_port.substr(colon + 1);
-		try {
-			r.port = std::stoi(std::string(port_sv));
-		} catch (...) {
-			// leave default
+	ParsedUrl result;
+	if (url.find_first_of(std::string_view{" \t\r\n\0#", 6}) != url.npos)
+		return result;
+	if (url.starts_with("wss://"))
+		url.remove_prefix(6);
+	else if (url.starts_with("ws://")) {
+		url.remove_prefix(5);
+		result.ssl = false;
+		result.port = 80;
+	} else
+		return result;
+	const std::size_t slash = url.find_first_of("/?");
+	const std::string_view authority = url.substr(0, slash);
+	if (authority.empty() || authority.find('@') != authority.npos)
+		return result;
+	if (slash != url.npos)
+		result.path = (url[slash] == '?' ? "/" : "") + std::string(url.substr(slash));
+	std::string_view host = authority, port;
+	if (authority.starts_with('[')) {
+		const std::size_t bracket = authority.find(']');
+		if (bracket == authority.npos)
+			return result;
+		host = authority.substr(1, bracket - 1);
+		if (bracket + 1 < authority.size()) {
+			if (authority[bracket + 1] != ':')
+				return result;
+			port = authority.substr(bracket + 2);
 		}
 	} else {
-		r.host = std::string(host_port);
+		const std::size_t colon = authority.find(':');
+		if (colon != authority.npos) {
+			host = authority.substr(0, colon);
+			port = authority.substr(colon + 1);
+		}
 	}
-	return r;
+	if (!port.empty()) {
+		const std::from_chars_result parsed =
+			std::from_chars(port.data(), port.data() + port.size(), result.port);
+		if (parsed.ec != std::errc{} || parsed.ptr != port.data() + port.size() ||
+			result.port < 1 || result.port > 65535)
+			return result;
+	} else if (authority.ends_with(':'))
+		return result;
+	result.host = host;
+	return result;
 }
 
-// ---- glz::generic access helpers ----
-//
-// All field reads go through these so a missing or wrong-typed field
-// produces a typed default rather than a throwing access. The bool
-// overload below is named ``get_bool_field`` (NOT another overload of
-// ``get_*``) to avoid the bool/string_view overload-set ambiguity that
-// bit the US client's ``append_query`` in v0.1.0 (see memory
-// ``feedback_polymarket_cpp_overload_bug.md``). The dispatcher's
-// inputs are always typed JSON, not raw literals, so the risk is
-// lower here — but we keep the names distinct to be safe.
+// Typed field access for selected market messages.
 
 const glz_node* find_field(const glz_node& node, const char* key) {
 	if (!node.is_object()) {
@@ -135,32 +112,22 @@ std::string get_string(const glz_node& node, const char* key) {
 
 Decimal get_decimal(const glz_node& node, const char* key) {
 	const glz_node* v = find_field(node, key);
-	if (!v) {
-		return Decimal{};
-	}
+	if (!v)
+		throw std::invalid_argument("Missing decimal field: " + std::string(key));
 	if (v->is_string()) {
 		return Decimal::from_string(v->get<std::string>());
 	}
 	if (v->is_number()) {
-		return Decimal::from_string(std::to_string(v->get<double>()));
+		return Decimal::from_double(v->as_number());
 	}
-	return Decimal{};
+	throw std::invalid_argument("Invalid decimal field: " + std::string(key));
 }
 
 uint256_t get_uint256(const glz_node& node, const char* key) {
 	const glz_node* v = find_field(node, key);
-	if (!v || !v->is_string()) {
-		return uint256_t{};
-	}
+	if (!v || !v->is_string())
+		throw std::invalid_argument("Invalid token ID field: " + std::string(key));
 	return uint256_t::from_string(v->get<std::string>());
-}
-
-Side get_side(const glz_node& node, const char* key) {
-	const std::string s = get_string(node, key);
-	if (s == "BUY" || s == "buy") {
-		return Side::Buy;
-	}
-	return Side::Sell;
 }
 
 Timestamp get_timestamp(const glz_node& node, const char* key) {
@@ -169,31 +136,24 @@ Timestamp get_timestamp(const glz_node& node, const char* key) {
 		return Timestamp{};
 	}
 	if (v->is_string()) {
-		try {
-			return static_cast<Timestamp>(std::stoll(v->get<std::string>()));
-		} catch (...) {
+		Timestamp value = 0;
+		const std::string& text = v->get<std::string>();
+		const std::from_chars_result parsed =
+			std::from_chars(text.data(), text.data() + text.size(), value);
+		if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size())
 			return Timestamp{};
-		}
+		return value;
 	}
 	if (v->is_number()) {
-		return static_cast<Timestamp>(v->get<double>());
+		Timestamp number = 0;
+		if (!detail::exact_integer(*v, number))
+			return Timestamp{};
+		return number;
 	}
 	return Timestamp{};
 }
 
-bool get_bool_field(const glz_node& node, const char* key, bool fallback) {
-	const glz_node* v = find_field(node, key);
-	if (!v || !v->is_boolean()) {
-		return fallback;
-	}
-	return v->get<bool>();
-}
-
-/// Parse one inbound JSON message into a typed ``WsMessage`` variant.
-/// Returns ``std::nullopt`` for unknown ``event_type`` values; the
-/// caller logs and drops. Field reads all go through ``find_field``
-/// so missing optional fields produce a well-typed default rather
-/// than throwing.
+// Preserve events without a typed decoder as complete JSON.
 std::optional<WsMessage> parse_message(const glz_node& j) {
 	const std::string ev = get_string(j, "event_type");
 
@@ -216,15 +176,6 @@ std::optional<WsMessage> parse_message(const glz_node& j) {
 		}
 		return s;
 	}
-	if (ev == "price_change") {
-		BookDelta d;
-		d.asset_id = get_uint256(j, "asset_id");
-		d.price = get_decimal(j, "price");
-		d.size = get_decimal(j, "size");
-		d.side = get_side(j, "side");
-		d.timestamp = get_timestamp(j, "timestamp");
-		return d;
-	}
 	if (ev == "tick_size_change") {
 		TickSizeChange t;
 		t.asset_id = get_uint256(j, "asset_id");
@@ -241,7 +192,7 @@ std::optional<WsMessage> parse_message(const glz_node& j) {
 		} else if (nts == "0.0001") {
 			t.new_tick_size = TickSize::TenThousandth;
 		} else {
-			t.new_tick_size = TickSize::Hundredth; // safe default
+			throw std::invalid_argument("Unsupported WebSocket tick size: " + nts);
 		}
 		return t;
 	}
@@ -252,50 +203,15 @@ std::optional<WsMessage> parse_message(const glz_node& j) {
 		m.timestamp = get_timestamp(j, "timestamp");
 		return m;
 	}
-	if (ev == "order") {
-		OrderFill f;
-		f.order_id = get_string(j, "id");
-		f.asset_id = get_uint256(j, "asset_id");
-		f.price = get_decimal(j, "price");
-		f.size = get_decimal(j, "size");
-		f.side = get_side(j, "side");
-		f.is_taker = get_bool_field(j, "is_taker", false);
-		f.timestamp = get_timestamp(j, "timestamp");
-		const std::string tx = get_string(j, "transaction_hash");
-		if (!tx.empty()) {
-			f.transaction_hash = tx;
-		}
-		return f;
+	if (ev == "order" || ev == "trade") {
+		std::string payload;
+		(void)glz::write_json(j, payload);
+		return UserEvent{ev, std::move(payload)};
 	}
-	if (ev == "cancel") {
-		OrderCancel c;
-		c.order_id = get_string(j, "id");
-		c.asset_id = get_uint256(j, "asset_id");
-		c.reason = get_string(j, "reason");
-		c.timestamp = get_timestamp(j, "timestamp");
-		return c;
-	}
-	if (ev == "trade") {
-		TradeConfirm t;
-		t.trade_id = get_string(j, "id");
-		t.order_id = get_string(j, "order_id");
-		t.asset_id = get_uint256(j, "asset_id");
-		t.price = get_decimal(j, "price");
-		t.size = get_decimal(j, "size");
-		t.timestamp = get_timestamp(j, "timestamp");
-		const std::string st = get_string(j, "status");
-		if (st == "MATCHED" || st == "matched") {
-			t.status = TradeStatus::Matched;
-		} else if (st == "MINED" || st == "mined") {
-			t.status = TradeStatus::Mined;
-		} else if (st == "CONFIRMED" || st == "confirmed") {
-			t.status = TradeStatus::Confirmed;
-		} else if (st == "FAILED" || st == "failed") {
-			t.status = TradeStatus::Failed;
-		} else {
-			t.status = TradeStatus::Matched;
-		}
-		return t;
+	if (!ev.empty()) {
+		std::string payload;
+		(void)glz::write_json(j, payload);
+		return MarketEvent{ev, std::move(payload)};
 	}
 	return std::nullopt;
 }
@@ -307,17 +223,12 @@ std::optional<WsMessage> parse_message(const glz_node& j) {
 static int clob_ws_callback(struct lws* wsi, enum lws_callback_reasons reason, void* user, void* in,
 							std::size_t len);
 
-struct WebSocketClient::Impl {
+struct WebSocketClient::Impl : detail::WsRuntime {
 	WsConfig config;
 	std::optional<Credentials> credentials;
 	ParsedUrl url;
 
 	// Connection.
-	struct lws_context* context = nullptr;
-	struct lws* wsi = nullptr;
-	std::thread service_thread;
-	std::atomic<bool> connected{false};
-	std::atomic<bool> should_stop{false};
 
 	// Application-level keepalive (libwebsockets has built-in PING but
 	// Polymarket's gateway expects an application-level frame every
@@ -338,33 +249,18 @@ struct WebSocketClient::Impl {
 	std::atomic<std::uint64_t> next_sub_id{1};
 
 	// Callbacks.
-	WsMessageCallback message_cb;
-	WsErrorCallback error_cb;
-	WsStateCallback state_cb;
+	detail::CallbackSlot<void(const WsMessage&)> message_cb;
+	detail::CallbackSlot<void(const WsError&)> error_cb;
+	detail::CallbackSlot<void(bool)> state_cb;
 
-	/// Compute timestamp + signature for the user-channel auth payload.
-	/// Polymarket CLOB uses HMAC-SHA256 over ``ts + GET + path`` with
-	/// the L2 secret. Returns ``{ts, sig_base64}``.
-	std::optional<std::pair<std::string, std::string>> compute_auth() const {
-		if (!credentials.has_value()) {
-			return std::nullopt;
-		}
-		const std::string ts = now_unix_ms();
-		auto sig = generate_l2_signature(credentials->api_secret, ts, "GET", url.path, /*body=*/"");
-		if (!sig.has_value()) {
-			return std::nullopt;
-		}
-		return std::make_pair(ts, *sig);
-	}
+	bool initial_subscription{false};
 
 	void enqueue(std::string frame) {
 		{
 			std::lock_guard<std::mutex> g(send_mutex);
 			send_queue.push_back(std::move(frame));
 		}
-		if (wsi) {
-			lws_callback_on_writable(wsi);
-		}
+		wake();
 	}
 
 	void emit_error(int code, const std::string& msg) {
@@ -378,127 +274,114 @@ struct WebSocketClient::Impl {
 
 static int clob_ws_callback(struct lws* wsi, enum lws_callback_reasons reason, void* user, void* in,
 							std::size_t len) {
-	(void)user;
-	auto* impl = static_cast<WebSocketClient::Impl*>(lws_context_user(lws_get_context(wsi)));
+	try {
+		(void)user;
+		auto* impl = static_cast<WebSocketClient::Impl*>(lws_context_user(lws_get_context(wsi)));
 
-	switch (reason) {
-		case LWS_CALLBACK_CLIENT_APPEND_HANDSHAKE_HEADER: {
-			auto auth = impl->compute_auth();
-			if (!auth.has_value()) {
-				return 0;
-			}
-			auto** p = reinterpret_cast<unsigned char**>(in);
-			auto* end = (*p) + len;
-			auto add = [&](const char* name, const std::string& value) {
-				return lws_add_http_header_by_name(
-					wsi, reinterpret_cast<const unsigned char*>(name),
-					reinterpret_cast<const unsigned char*>(value.c_str()),
-					static_cast<int>(value.size()), p, end);
-			};
-			if (add("POLY_ADDRESS:", impl->credentials->api_key) != 0 ||
-				add("POLY_TIMESTAMP:", auth->first) != 0 ||
-				add("POLY_SIGNATURE:", auth->second) != 0 ||
-				add("POLY_API_KEY:", impl->credentials->api_key) != 0 ||
-				add("POLY_PASSPHRASE:", impl->credentials->passphrase) != 0) {
-				impl->emit_error(0, "failed to attach CLOB auth headers");
-				return -1;
-			}
-			return 0;
-		}
-
-		case LWS_CALLBACK_CLIENT_ESTABLISHED: {
-			impl->connected.store(true, std::memory_order_release);
-			impl->last_ping = std::chrono::steady_clock::now();
-			if (impl->state_cb) {
-				impl->state_cb(true);
-			}
-			return 0;
-		}
-
-		case LWS_CALLBACK_CLIENT_RECEIVE: {
-			if (!in || !len) {
-				return 0;
-			}
-			impl->fragment_buf.append(static_cast<const char*>(in), len);
-			if (!lws_is_final_fragment(wsi)) {
-				return 0;
-			}
-			std::string payload = std::move(impl->fragment_buf);
-			impl->fragment_buf.clear();
-
-			glz_node parsed{};
-			glz::error_ctx ec = glz::read_json(parsed, payload);
-			if (ec) {
-				impl->emit_error(0, std::string{"invalid JSON: "} + glz::format_error(ec, payload));
-				return 0;
-			}
-
-			auto dispatch_one = [&](const glz_node& j) {
-				std::optional<WsMessage> msg = parse_message(j);
-				if (!msg.has_value()) {
-					return;
+		switch (reason) {
+			case LWS_CALLBACK_CLIENT_ESTABLISHED: {
+				impl->connected.store(true, std::memory_order_release);
+				impl->last_ping = std::chrono::steady_clock::now();
+				if (impl->state_cb) {
+					impl->state_cb(true);
 				}
-				if (impl->message_cb) {
-					impl->message_cb(*msg);
-				}
-			};
-			if (parsed.is_array()) {
-				for (const glz_node& el : parsed.get_array()) {
-					dispatch_one(el);
-				}
-			} else {
-				dispatch_one(parsed);
+				return 0;
 			}
-			return 0;
-		}
 
-		case LWS_CALLBACK_CLIENT_WRITEABLE: {
-			std::string frame;
-			{
-				std::lock_guard<std::mutex> g(impl->send_mutex);
-				if (impl->send_queue.empty()) {
+			case LWS_CALLBACK_CLIENT_RECEIVE: {
+				if (!in || !len) {
 					return 0;
 				}
-				frame = std::move(impl->send_queue.front());
-				impl->send_queue.pop_front();
+				if (len > kMaxFrameSize - impl->fragment_buf.size())
+					return -1;
+				impl->fragment_buf.append(static_cast<const char*>(in), len);
+				if (!lws_is_final_fragment(wsi) || lws_remaining_packet_payload(wsi)) {
+					return 0;
+				}
+				std::string payload = std::move(impl->fragment_buf);
+				impl->fragment_buf.clear();
+
+				if (payload == "PONG")
+					return 0;
+				glz_node parsed{};
+				glz::error_ctx ec = glz::read<polymarket::detail::kReadOptions>(parsed, payload);
+				if (ec) {
+					impl->emit_error(0, std::string{"invalid JSON: "} +
+											glz::format_error(ec, payload));
+					return 0;
+				}
+
+				auto dispatch_one = [&](const glz_node& j) {
+					try {
+						const std::optional<WsMessage> msg = parse_message(j);
+						if (msg && impl->message_cb)
+							impl->message_cb(*msg);
+					} catch (const std::exception& error) {
+						impl->emit_error(0, error.what());
+					}
+				};
+				if (parsed.is_array()) {
+					for (const glz_node& el : parsed.get_array()) {
+						dispatch_one(el);
+					}
+				} else {
+					dispatch_one(parsed);
+				}
+				return 0;
 			}
-			std::vector<unsigned char> buf(LWS_PRE + frame.size());
-			std::memcpy(buf.data() + LWS_PRE, frame.data(), frame.size());
-			int written = lws_write(wsi, buf.data() + LWS_PRE, frame.size(), LWS_WRITE_TEXT);
-			if (written < 0) {
-				impl->emit_error(0, "lws_write failed");
+
+			case LWS_CALLBACK_CLIENT_WRITEABLE: {
+				std::string frame;
+				{
+					std::lock_guard<std::mutex> g(impl->send_mutex);
+					if (impl->send_queue.empty()) {
+						return 0;
+					}
+					frame = std::move(impl->send_queue.front());
+					impl->send_queue.pop_front();
+				}
+				std::vector<unsigned char> buf(LWS_PRE + frame.size());
+				std::memcpy(buf.data() + LWS_PRE, frame.data(), frame.size());
+				int written = lws_write(wsi, buf.data() + LWS_PRE, frame.size(), LWS_WRITE_TEXT);
+				if (written < 0 || static_cast<std::size_t>(written) != frame.size()) {
+					impl->emit_error(0, "lws_write failed");
+					return -1;
+				}
+				{
+					std::lock_guard<std::mutex> g(impl->send_mutex);
+					if (!impl->send_queue.empty()) {
+						lws_callback_on_writable(wsi);
+					}
+				}
+				return 0;
+			}
+
+			case LWS_CALLBACK_CLIENT_CONNECTION_ERROR: {
+				const std::string err = in ? std::string(static_cast<const char*>(in), len)
+										   : std::string{"(no detail)"};
+				impl->emit_error(0, "connection error: " + err);
+				impl->connected.store(false, std::memory_order_release);
+				impl->should_stop.store(true, std::memory_order_release);
+				if (impl->state_cb) {
+					impl->state_cb(false);
+				}
 				return -1;
 			}
-			{
-				std::lock_guard<std::mutex> g(impl->send_mutex);
-				if (!impl->send_queue.empty()) {
-					lws_callback_on_writable(wsi);
+
+			case LWS_CALLBACK_CLIENT_CLOSED: {
+				impl->connected.store(false, std::memory_order_release);
+				impl->should_stop.store(true, std::memory_order_release);
+				if (impl->state_cb) {
+					impl->state_cb(false);
 				}
+				return 0;
 			}
-			return 0;
-		}
 
-		case LWS_CALLBACK_CLIENT_CONNECTION_ERROR: {
-			const std::string err =
-				in ? std::string(static_cast<const char*>(in), len) : std::string{"(no detail)"};
-			impl->emit_error(0, "connection error: " + err);
-			impl->connected.store(false, std::memory_order_release);
-			if (impl->state_cb) {
-				impl->state_cb(false);
-			}
-			return -1;
+			default:
+				return 0;
 		}
-
-		case LWS_CALLBACK_CLIENT_CLOSED: {
-			impl->connected.store(false, std::memory_order_release);
-			if (impl->state_cb) {
-				impl->state_cb(false);
-			}
-			return 0;
-		}
-
-		default:
-			return 0;
+	} catch (...) {
+		return -1;
 	}
 }
 
@@ -508,13 +391,15 @@ static const struct lws_protocols kProtocols[] = {
 
 // ─── WebSocketClient public surface ────────────────────────────────
 
-WebSocketClient::WebSocketClient(WsConfig config) : impl_(std::make_unique<Impl>()) {
+WebSocketClient::WebSocketClient(WsConfig config) : impl_(std::make_shared<Impl>()) {
 	impl_->config = std::move(config);
 	impl_->url = parse_url(impl_->config.url);
 }
 
 WebSocketClient::WebSocketClient(WsConfig config, Credentials credentials)
-	: impl_(std::make_unique<Impl>()) {
+	: impl_(std::make_shared<Impl>()) {
+	if (config.url == WsConfig{}.url)
+		config.url = "wss://ws-subscriptions-clob.polymarket.com/ws/user";
 	impl_->config = std::move(config);
 	impl_->url = parse_url(impl_->config.url);
 	impl_->credentials = std::move(credentials);
@@ -525,92 +410,123 @@ WebSocketClient::~WebSocketClient() {
 }
 
 WebSocketClient::WebSocketClient(WebSocketClient&&) noexcept = default;
-WebSocketClient& WebSocketClient::operator=(WebSocketClient&&) noexcept = default;
+WebSocketClient& WebSocketClient::operator=(WebSocketClient&& other) noexcept {
+	if (this != &other) {
+		disconnect();
+		impl_ = std::move(other.impl_);
+	}
+	return *this;
+}
 
 VoidResult WebSocketClient::connect() {
-	// A moved-from instance has impl_ == nullptr. Surface a clean error
-	// rather than dereferencing through nullptr a few lines below.
-	if (!impl_) {
-		return std::unexpected(Error::network("client moved-from"));
+	const std::shared_ptr<Impl> state = impl_;
+	if (!state)
+		return std::unexpected(Error::validation("Client moved-from"));
+	if (state && (state->url.host.empty() || state->url.port < 1 || state->url.port > 65535))
+		return std::unexpected(Error::validation("Invalid WebSocket URL"));
+
+	const bool user_channel = state->url.path == "/ws/user";
+	if (!user_channel && state->url.path != "/ws/market")
+		return std::unexpected(Error::validation("Expected /ws/market or /ws/user endpoint"));
+	if (user_channel &&
+		(!state->credentials || state->credentials->api_key.empty() ||
+		 state->credentials->api_secret.empty() || state->credentials->passphrase.empty()))
+		return std::unexpected(Error::validation("User channel requires API credentials"));
+	state->stop();
+	if (state->worker_running.load(std::memory_order_acquire))
+		return std::unexpected(Error::network("Previous worker is stopping"));
+	if (!detail::keep_tls_initialized())
+		return std::unexpected(Error::network("TLS initialization failed"));
+	detail::RetiredThreads::instance().reap();
+	state->should_stop.store(false, std::memory_order_release);
+	{
+		const std::lock_guard lock(state->send_mutex);
+		state->send_queue.clear();
 	}
-	// Idempotent: tear down any existing context before standing a new
-	// one up.
-	disconnect();
+	state->fragment_buf.clear();
+	state->initial_subscription = false;
+	state->config.ping_interval =
+		std::clamp(state->config.ping_interval, std::chrono::seconds{1}, std::chrono::seconds{10});
+	{
+		const std::lock_guard lock(state->sub_mutex);
+		state->active_subs.clear();
+	}
 
 	struct lws_context_creation_info ctx_info {};
 	std::memset(&ctx_info, 0, sizeof(ctx_info));
 	ctx_info.port = CONTEXT_PORT_NO_LISTEN;
 	ctx_info.protocols = kProtocols;
-	ctx_info.user = impl_.get();
-	ctx_info.options = impl_->url.ssl ? LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT : 0;
+	ctx_info.user = state.get();
+	ctx_info.options = state->url.ssl ? LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT : 0;
 
-	impl_->context = lws_create_context(&ctx_info);
-	if (!impl_->context) {
+	state->context = lws_create_context(&ctx_info);
+	if (!state->context) {
 		return std::unexpected(Error::network("lws_create_context failed"));
 	}
 
 	struct lws_client_connect_info ci {};
 	std::memset(&ci, 0, sizeof(ci));
-	ci.context = impl_->context;
-	ci.address = impl_->url.host.c_str();
-	ci.port = impl_->url.port;
-	ci.path = impl_->url.path.c_str();
-	ci.host = impl_->url.host.c_str();
-	ci.origin = impl_->url.host.c_str();
+	ci.context = state->context;
+	ci.address = state->url.host.c_str();
+	ci.port = state->url.port;
+	ci.path = state->url.path.c_str();
+	ci.host = state->url.host.c_str();
+	ci.origin = state->url.host.c_str();
 	ci.protocol = kProtocols[0].name;
-	ci.ssl_connection = impl_->url.ssl ? LCCSCF_USE_SSL : 0;
+	ci.ssl_connection = state->url.ssl ? LCCSCF_USE_SSL : 0;
 
-	impl_->wsi = lws_client_connect_via_info(&ci);
-	if (!impl_->wsi) {
-		lws_context_destroy(impl_->context);
-		impl_->context = nullptr;
+	state->wsi = lws_client_connect_via_info(&ci);
+	if (!state->wsi) {
+		state->release_context();
 		return std::unexpected(Error::network("lws_client_connect_via_info failed"));
 	}
 
-	impl_->should_stop.store(false, std::memory_order_release);
-	impl_->service_thread = std::thread([impl = impl_.get()]() {
-		while (!impl->should_stop.load(std::memory_order_acquire) && impl->context) {
-			lws_service(impl->context, 50);
-			if (impl->connected.load(std::memory_order_acquire)) {
-				const auto now = std::chrono::steady_clock::now();
-				if (now - impl->last_ping >= impl->config.ping_interval) {
-					impl->enqueue("PING");
-					impl->last_ping = now;
+	if (state->should_stop.load(std::memory_order_acquire)) {
+		state->release_context();
+		return std::unexpected(Error::network("Disconnected while connecting"));
+	}
+	try {
+		state->start(state, [](Impl& impl) {
+			if (impl.connected.load(std::memory_order_acquire)) {
+				const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+				if (now - impl.last_ping >= impl.config.ping_interval) {
+					impl.enqueue("PING");
+					impl.last_ping = now;
 				}
 			}
-		}
-	});
+			const std::lock_guard lock(impl.send_mutex);
+			if (!impl.send_queue.empty() && impl.wsi)
+				lws_callback_on_writable(impl.wsi);
+		});
+
+	} catch (const std::exception& error) {
+		state->release_context();
+		return std::unexpected(Error::network(error.what()));
+	}
 
 	// Wait up to 10s for the upgrade — same shape as
 	// us/ws/subscriber.cpp.
 	const auto start = std::chrono::steady_clock::now();
-	while (!impl_->connected.load(std::memory_order_acquire) &&
-		   !impl_->should_stop.load(std::memory_order_acquire)) {
+	while (!state->connected.load(std::memory_order_acquire) &&
+		   !state->should_stop.load(std::memory_order_acquire)) {
 		if (std::chrono::steady_clock::now() - start > std::chrono::seconds(10)) {
-			disconnect();
+			state->stop();
 			return std::unexpected(Error::network("WS upgrade timed out after 10s"));
 		}
 		std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	}
+	if (!state->connected.load(std::memory_order_acquire))
+		return std::unexpected(Error::network("WebSocket closed during handshake"));
 	return {};
 }
 
 void WebSocketClient::disconnect() {
-	if (!impl_) {
-		return;
+	const std::shared_ptr<Impl> state = impl_;
+	if (state) {
+		state->stop();
+		const std::lock_guard lock(state->sub_mutex);
+		state->active_subs.clear();
 	}
-	impl_->should_stop.store(true, std::memory_order_release);
-	impl_->connected.store(false, std::memory_order_release);
-	if (impl_->service_thread.joinable()) {
-		impl_->service_thread.join();
-	}
-	if (impl_->context) {
-		lws_context_destroy(impl_->context);
-		impl_->context = nullptr;
-		impl_->wsi = nullptr;
-	}
-	std::lock_guard<std::mutex> g(impl_->sub_mutex);
-	impl_->active_subs.clear();
 }
 
 bool WebSocketClient::is_connected() const noexcept {
@@ -651,12 +567,16 @@ std::string bytes32_array_json(const std::vector<Bytes32>& v) {
 } // namespace
 
 Result<SubscriptionId> WebSocketClient::subscribe_market(const std::vector<uint256_t>& asset_ids) {
+	if (!impl_)
+		return std::unexpected(Error::validation("Client moved-from"));
 	return subscribe_market_with_options(asset_ids, impl_->config.enable_custom_features);
 }
 
 Result<SubscriptionId>
 WebSocketClient::subscribe_market_with_options(const std::vector<uint256_t>& asset_ids,
 											   bool custom_features) {
+	if (!impl_ || impl_->url.path != "/ws/market")
+		return std::unexpected(Error::validation("Requires /ws/market endpoint"));
 	if (!is_connected()) {
 		return std::unexpected(Error::network("not connected"));
 	}
@@ -665,12 +585,15 @@ WebSocketClient::subscribe_market_with_options(const std::vector<uint256_t>& ass
 			Error::validation("subscribe_market requires at least one asset_id"));
 	}
 	std::ostringstream o;
-	o << R"({"type":"market","assets_ids":)" << asset_ids_array_json(asset_ids);
+	o << (impl_->initial_subscription ? R"({"operation":"subscribe","assets_ids":)"
+									  : R"({"type":"market","assets_ids":)")
+	  << asset_ids_array_json(asset_ids);
 	if (custom_features) {
-		o << R"(,"initial_dump":true)";
+		o << R"(,"custom_feature_enabled":true)";
 	}
 	o << '}';
 	impl_->enqueue(o.str());
+	impl_->initial_subscription = true;
 
 	SubscriptionId sub{impl_->next_sub_id.fetch_add(1, std::memory_order_relaxed)};
 	std::lock_guard<std::mutex> g(impl_->sub_mutex);
@@ -679,16 +602,20 @@ WebSocketClient::subscribe_market_with_options(const std::vector<uint256_t>& ass
 }
 
 VoidResult WebSocketClient::unsubscribe_market(const std::vector<uint256_t>& asset_ids) {
+	if (!impl_ || impl_->url.path != "/ws/market")
+		return std::unexpected(Error::validation("Requires /ws/market endpoint"));
 	if (!is_connected()) {
 		return std::unexpected(Error::network("not connected"));
 	}
 	std::ostringstream o;
-	o << R"({"type":"unsubscribe","markets":)" << asset_ids_array_json(asset_ids) << '}';
+	o << R"({"operation":"unsubscribe","assets_ids":)" << asset_ids_array_json(asset_ids) << '}';
 	impl_->enqueue(o.str());
 	return {};
 }
 
 Result<SubscriptionId> WebSocketClient::subscribe_user(const std::vector<Bytes32>& markets) {
+	if (!impl_ || impl_->url.path != "/ws/user")
+		return std::unexpected(Error::validation("Requires /ws/user endpoint"));
 	if (!is_connected()) {
 		return std::unexpected(Error::network("not connected"));
 	}
@@ -696,8 +623,20 @@ Result<SubscriptionId> WebSocketClient::subscribe_user(const std::vector<Bytes32
 		return std::unexpected(Error::validation("subscribe_user requires Credentials"));
 	}
 	std::ostringstream o;
-	o << R"({"type":"user","markets":)" << bytes32_array_json(markets) << '}';
+	if (impl_->initial_subscription)
+		o << R"({"operation":"subscribe","markets":)" << bytes32_array_json(markets) << '}';
+	else {
+		glz_node auth;
+		auth["apiKey"] = impl_->credentials->api_key;
+		auth["secret"] = impl_->credentials->api_secret;
+		auth["passphrase"] = impl_->credentials->passphrase;
+		std::string encoded;
+		(void)glz::write_json(auth, encoded);
+		o << R"({"type":"user","auth":)" << encoded << R"(,"markets":)"
+		  << bytes32_array_json(markets) << '}';
+	}
 	impl_->enqueue(o.str());
+	impl_->initial_subscription = true;
 	SubscriptionId sub{impl_->next_sub_id.fetch_add(1, std::memory_order_relaxed)};
 	std::lock_guard<std::mutex> g(impl_->sub_mutex);
 	impl_->active_subs.push_back(sub);
@@ -705,33 +644,34 @@ Result<SubscriptionId> WebSocketClient::subscribe_user(const std::vector<Bytes32
 }
 
 VoidResult WebSocketClient::unsubscribe_user(const std::vector<Bytes32>& markets) {
+	if (!impl_ || impl_->url.path != "/ws/user")
+		return std::unexpected(Error::validation("Requires /ws/user endpoint"));
 	if (!is_connected()) {
 		return std::unexpected(Error::network("not connected"));
 	}
 	std::ostringstream o;
-	o << R"({"type":"unsubscribe_user","markets":)" << bytes32_array_json(markets) << '}';
+	o << R"({"operation":"unsubscribe","markets":)" << bytes32_array_json(markets) << '}';
 	impl_->enqueue(o.str());
 	return {};
 }
 
 void WebSocketClient::on_message(WsMessageCallback callback) {
-	impl_->message_cb = std::move(callback);
+	if (impl_)
+		impl_->message_cb = std::move(callback);
 }
 
 void WebSocketClient::on_error(WsErrorCallback callback) {
-	impl_->error_cb = std::move(callback);
+	if (impl_)
+		impl_->error_cb = std::move(callback);
 }
 
 void WebSocketClient::on_state_change(WsStateCallback callback) {
-	impl_->state_cb = std::move(callback);
+	if (impl_)
+		impl_->state_cb = std::move(callback);
 }
 
 const WsConfig& WebSocketClient::config() const noexcept {
-	// The defaulted move ctor leaves the moved-from object's impl_ as
-	// nullptr; returning a reference into the null would crash. Surface
-	// a static empty config so accessors stay safe on moved-from
-	// instances (matches the null-guard pattern in disconnect() /
-	// is_connected()).
+	// Moved-from accessors expose a stable default.
 	if (!impl_) {
 		static const WsConfig kEmpty{};
 		return kEmpty;

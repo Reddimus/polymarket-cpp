@@ -1,5 +1,5 @@
-cmake_minimum_required(VERSION 3.20)
-project(polymarket-cpp VERSION 0.4.3 LANGUAGES CXX)
+cmake_minimum_required(VERSION 3.31)
+project(polymarket-cpp VERSION 0.5.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,10 +10,10 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 # Options
-option(POLYMARKET_BUILD_TESTS "Build tests" ON)
-option(POLYMARKET_BUILD_EXAMPLES "Build examples" ON)
-option(POLYMARKET_BUILD_APPS "Build production CLI binaries (apps/)" ON)
-option(POLYMARKET_ENABLE_LTO "Enable Link Time Optimization" ON)
+option(POLYMARKET_BUILD_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
+option(POLYMARKET_BUILD_EXAMPLES "Build examples" ${PROJECT_IS_TOP_LEVEL})
+option(POLYMARKET_BUILD_APPS "Build production CLI binaries (apps/)" ${PROJECT_IS_TOP_LEVEL})
+option(POLYMARKET_ENABLE_LTO "Enable Link Time Optimization" ${PROJECT_IS_TOP_LEVEL})
 option(POLYMARKET_NATIVE_ARCH "Use -march=native for CPU-specific tuning" OFF)
 option(POLYMARKET_USE_CPP26 "Enable C++26 features (experimental)" OFF)
 
@@ -22,12 +22,6 @@ if(POLYMARKET_USE_CPP26)
     set(CMAKE_CXX_STANDARD 26)
     add_compile_definitions(POLYMARKET_HAS_REFLECTION)
     message(STATUS "C++26 mode enabled (experimental)")
-endif()
-
-# Aggressive optimization flags for Release builds. MSVC has its own
-# Release defaults; only override for GCC/Clang.
-if(NOT MSVC)
-    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
 endif()
 
 # Enable LTO if requested and supported
@@ -42,20 +36,19 @@ if(POLYMARKET_ENABLE_LTO)
     endif()
 endif()
 
-# CPU-specific tuning. GCC/Clang only — MSVC uses /arch flags with
-# different semantics so we leave its defaults untouched.
-if(NOT MSVC)
-    if(POLYMARKET_NATIVE_ARCH)
-        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -march=native")
-        message(STATUS "Using -march=native for CPU-specific optimizations")
-    else()
-        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -mtune=generic")
-    endif()
+if(POLYMARKET_NATIVE_ARCH AND NOT MSVC)
+    add_compile_options($<$<CONFIG:Release>:-march=native>)
+endif()
+option(POLYMARKET_ENABLE_SANITIZERS "Enable ASan and UBSan" OFF)
+if(POLYMARKET_ENABLE_SANITIZERS AND NOT MSVC)
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
 endif()
 
 # Find dependencies
-find_package(OpenSSL REQUIRED)
-find_package(CURL REQUIRED)
+find_package(OpenSSL 3.0 REQUIRED)
+find_package(CURL 7.85 REQUIRED)
+find_package(Threads REQUIRED)
 if(NOT WIN32)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(WEBSOCKETS REQUIRED IMPORTED_TARGET libwebsockets)
@@ -64,11 +57,7 @@ else()
     find_package(libwebsockets CONFIG REQUIRED)
 endif()
 
-# libsecp256k1 — Bitcoin Core's reference implementation. Provides the
-# only correct ECDSA public-key recovery primitive on this stack
-# (OpenSSL has none). Fetched at configure time so consumers don't
-# need a system package; recovery + extrakeys modules enabled so
-# both sign-recoverable and ecrecover paths are available.
+# Bundled secp256k1 provides recoverable ECDSA signatures.
 include(FetchContent)
 set(SECP256K1_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(SECP256K1_BUILD_BENCHMARK OFF CACHE BOOL "" FORCE)
@@ -76,6 +65,7 @@ set(SECP256K1_BUILD_EXHAUSTIVE_TESTS OFF CACHE BOOL "" FORCE)
 set(SECP256K1_BUILD_CTIME_TESTS OFF CACHE BOOL "" FORCE)
 set(SECP256K1_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(SECP256K1_ENABLE_MODULE_RECOVERY ON CACHE BOOL "" FORCE)
+# Export only its archive below; upstream headers stay private.
 set(SECP256K1_INSTALL OFF CACHE BOOL "" FORCE)
 set(SECP256K1_DISABLE_SHARED ON CACHE BOOL "" FORCE)
 FetchContent_Declare(secp256k1
@@ -85,21 +75,17 @@ FetchContent_Declare(secp256k1
 )
 FetchContent_MakeAvailable(secp256k1)
 
-# Glaze — JSON library (compile-time reflection, ~3-4x parse speedup
-# over nlohmann on numeric-heavy payloads — the CLOB orderbook hot
-# path). Used by the CLOB WebSocket message dispatcher + the
-# polymarket_us_cli stdin/stdout JSON envelope. License: MIT.
-# Migrated from nlohmann/json v3.11.3 on 2026-05-11; the previous
-# `FetchContent_Declare(json ...)` dep is removed.
+# Private JSON dependency.
 FetchContent_Declare(glaze
     GIT_REPOSITORY https://github.com/stephenberry/glaze.git
-    GIT_TAG        v7.6.0
+    GIT_TAG        v9.0.0
+    EXCLUDE_FROM_ALL
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(glaze)
 
 # Include directories
-include_directories(${CMAKE_SOURCE_DIR}/include)
+include_directories(${PROJECT_SOURCE_DIR}/include)
 
 # Add subdirectories
 add_subdirectory(src)
@@ -121,6 +107,7 @@ endif()
 set(POLYMARKET_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/polymarket")
 
 install(TARGETS
+    polymarket_hash
     polymarket_core
     polymarket_http
     polymarket_crypto
@@ -162,3 +149,10 @@ install(FILES
     ${CMAKE_CURRENT_BINARY_DIR}/polymarketConfigVersion.cmake
     DESTINATION ${POLYMARKET_INSTALL_CMAKEDIR}
 )
+
+add_library(polymarket::polymarket ALIAS polymarket)
+install(FILES "${secp256k1_SOURCE_DIR}/COPYING"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/licenses/polymarket/secp256k1")
+if(POLYMARKET_ENABLE_SANITIZERS AND NOT MSVC)
+    target_link_options(polymarket_core INTERFACE -fsanitize=address,undefined)
+endif()

@@ -1,7 +1,6 @@
 /// @file keccak.cpp
 /// @brief Keccak-256 implementation (Ethereum variant)
 ///
-/// Uses OpenSSL's EVP interface for the hash computation.
 /// IMPORTANT: Ethereum uses original Keccak (0x01 padding), not SHA-3 (0x06
 /// padding).
 
@@ -12,8 +11,6 @@
 #include <bit>
 #include <cstring>
 #include <iomanip>
-#include <openssl/err.h>
-#include <openssl/evp.h>
 #include <sstream>
 
 namespace polymarket::crypto {
@@ -41,18 +38,7 @@ constexpr int ROTATION[5][5] = {{0, 1, 62, 28, 27},
 								{18, 2, 61, 56, 14}};
 
 inline std::uint64_t rotl64(std::uint64_t x, int n) {
-	// C++20 ``std::rotl`` is the well-defined left-rotate. The previous
-	// hand-rolled ``(x << n) | (x >> (64 - n))`` was UB when n == 0
-	// (the right shift's count was 64, == type width). GCC/Linux-Clang
-	// happened to return 0 for that shift; Apple Clang at -O2 is
-	// documented to take advantage of the UB and produce silently
-	// incorrect output — the symptom that broke the macOS Keccak /
-	// EIP-55 / EIP-712 / Address tests in CI on macos-latest while
-	// Linux apt-clang/gcc passed all 44/44.
-	//
-	// ``ROTATION[0][0] == 0`` in keccak_f's ρ/π step path triggers
-	// the n=0 case once per Keccak round, which is enough to corrupt
-	// the digest deterministically.
+	// std::rotl handles zero without shifting by the type width.
 	return std::rotl(x, n);
 }
 
@@ -103,7 +89,7 @@ Keccak256Hash keccak256(std::span<const std::uint8_t> data) {
 
 	// Absorb phase
 	size_t offset = 0;
-	while (offset + KECCAK_RATE <= data.size()) {
+	while (data.size() - offset >= KECCAK_RATE) {
 		for (int i = 0; i < KECCAK_RATE / 8; ++i) {
 			std::uint64_t lane = 0;
 			for (int j = 0; j < 8; ++j) {
@@ -118,7 +104,8 @@ Keccak256Hash keccak256(std::span<const std::uint8_t> data) {
 	// Absorb remaining bytes with padding
 	std::array<std::uint8_t, KECCAK_RATE> padded = {0};
 	size_t remaining = data.size() - offset;
-	std::memcpy(padded.data(), data.data() + offset, remaining);
+	if (remaining != 0)
+		std::memcpy(padded.data(), data.data() + offset, remaining);
 
 	// Keccak padding: 0x01 at end of message, 0x80 at end of block
 	// IMPORTANT: Ethereum uses 0x01, NOT SHA-3's 0x06

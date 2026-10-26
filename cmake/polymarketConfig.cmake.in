@@ -2,9 +2,14 @@
 
 include(CMakeFindDependencyMacro)
 
-find_dependency(OpenSSL)
-find_dependency(CURL)
-find_dependency(PkgConfig)
-pkg_check_modules(WEBSOCKETS REQUIRED IMPORTED_TARGET libwebsockets)
+find_dependency(OpenSSL 3.0)
+find_dependency(CURL 7.85)
+find_dependency(Threads)
+if(WIN32)
+    find_dependency(libwebsockets CONFIG)
+else()
+    find_dependency(PkgConfig)
+    pkg_check_modules(WEBSOCKETS REQUIRED IMPORTED_TARGET libwebsockets)
+endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/polymarketTargets.cmake")

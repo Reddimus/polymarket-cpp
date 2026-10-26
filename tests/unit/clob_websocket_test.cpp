@@ -59,8 +59,8 @@ TEST_CASE("CLOB WebSocketClient default config matches the documented endpoint",
 	// staging URL would surface as a test failure rather than silently
 	// connecting somewhere wrong in production.
 	WebSocketClient client;
-	REQUIRE(client.config().url == "wss://ws-subscriptions-clob.polymarket.com/ws/");
-	REQUIRE(client.config().auto_reconnect);
+	REQUIRE(client.config().url == "wss://ws-subscriptions-clob.polymarket.com/ws/market");
+	REQUIRE_FALSE(client.config().auto_reconnect);
 	REQUIRE(client.config().max_reconnect_attempts > 0);
 	REQUIRE(client.config().ping_interval > std::chrono::seconds{0});
 }
@@ -86,7 +86,7 @@ TEST_CASE("CLOB subscribe_user before connect rejects with network error",
 	// Pre-connect rejection takes precedence over the missing-credentials
 	// rejection — both branches live on the user path so this also
 	// confirms the order of checks is connect-then-creds.
-	WebSocketClient client;
+	WebSocketClient client(WsConfig{}, make_test_credentials());
 	auto rc = client.subscribe_user();
 	REQUIRE_FALSE(rc.has_value());
 	REQUIRE(rc.error().code() == ErrorCode::NetworkError);
@@ -167,4 +167,16 @@ TEST_CASE("CLOB callback registration accepts and replaces handlers", "[clob][ws
 	REQUIRE(message_count == 0);
 	REQUIRE(error_count == 0);
 	REQUIRE(state_count == 0);
+}
+
+TEST_CASE("CLOB channel defaults and moved clients fail safely", "[clob][ws][channel]") {
+	WebSocketClient user(WsConfig{}, make_test_credentials());
+	REQUIRE(user.config().url == "wss://ws-subscriptions-clob.polymarket.com/ws/user");
+	REQUIRE_FALSE(user.subscribe_market({polymarket::uint256_t::from_u64(1)}));
+	WebSocketClient moved(std::move(user));
+	REQUIRE_FALSE(user.subscribe_market({polymarket::uint256_t::from_u64(1)}));
+	WsConfig config;
+	config.url = "ws://127.0.0.1:1/ws/user";
+	WebSocketClient anonymous(config);
+	REQUIRE_FALSE(anonymous.connect());
 }

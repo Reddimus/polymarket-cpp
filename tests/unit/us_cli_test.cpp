@@ -178,3 +178,35 @@ TEST_CASE("polymarket-us-cli get_order requires order_id", "[us_cli][get_order][
 	REQUIRE(r.exit_code == 5);
 	REQUIRE_THAT(r.stdout_text, Catch::Matchers::ContainsSubstring("order_id"));
 }
+
+#ifdef POLYMARKET_US_CLI_PATH
+TEST_CASE("CLI invalid optional order values fail before network", "[us_cli][validation]") {
+	const auto credentials = make_synthetic_creds_file();
+	for (const std::string& invalid : {R"("post_only":"true")", R"("expiration":1e30)",
+									   R"("expiration":1.5)", R"("manual_order_indicator":123)"}) {
+		const std::string input =
+			R"({"command":"place_order","params":{"market_id":"fixture","side":"buy","type":"limit","price":"0.5","size":"1",)" +
+			invalid + "}}";
+		const CliRun result = run_cli(
+			"--credentials " + credentials.string() + " --api-base-url http://127.0.0.1:1", input);
+		REQUIRE(result.exit_code == 5);
+		REQUIRE_THAT(result.stdout_text, Catch::Matchers::ContainsSubstring("bad_request"));
+	}
+	std::filesystem::remove(credentials);
+}
+#endif
+
+TEST_CASE("polymarket-us-cli accepts line credentials with editor endings", "[us_cli][creds]") {
+	const std::string secret = std::string(86, 'A') + "==";
+	for (const std::string ending : {"\n", "\r\n", "\t\r\n"}) {
+		const auto path = make_synthetic_creds_file();
+		{
+			std::ofstream output(path, std::ios::binary | std::ios::trunc);
+			output << "fixture:" << secret << ending;
+		}
+		const CliRun result = run_cli("--credentials " + path.string(), R"({"command":"unknown"})");
+		std::filesystem::remove(path);
+		REQUIRE(result.exit_code == 5);
+		REQUIRE_THAT(result.stdout_text, Catch::Matchers::ContainsSubstring("unknown command"));
+	}
+}

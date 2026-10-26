@@ -240,7 +240,6 @@ TEST_CASE("Polymarket US place_order validates time-in-force before HTTP call",
 	req.price = Decimal::from_string("0.50");
 	req.size = Decimal::from_string("10");
 	req.time_in_force = "ioc";
-	req.client_order_id = "weather-trader-test";
 	req.manual_order_indicator = false;
 
 	auto result = client.place_order(req);
