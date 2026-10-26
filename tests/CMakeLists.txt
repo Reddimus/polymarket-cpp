@@ -43,6 +43,11 @@ target_link_libraries(polymarket_tests PRIVATE
 )
 
 target_compile_features(polymarket_tests PRIVATE cxx_std_23)
+if(WIN32)
+    target_compile_definitions(polymarket_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_link_libraries(polymarket_tests PRIVATE ws2_32)
+endif()
+
 
 # us_cli_test exec's the polymarket-us-cli binary via popen; pass its
 # resolved path so the test doesn't depend on cwd. Only wired when

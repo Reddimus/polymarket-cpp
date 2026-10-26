@@ -41,7 +41,7 @@ add_library(polymarket_crypto STATIC
 )
 target_link_libraries(polymarket_crypto PUBLIC polymarket_core OpenSSL::SSL OpenSSL::Crypto)
 # Static consumers still link the separately exported secp256k1 archive.
-target_link_libraries(polymarket_crypto PUBLIC $<LINK_ONLY:secp256k1>)
+target_link_libraries(polymarket_crypto PRIVATE secp256k1)
 target_include_directories(polymarket_crypto PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
@@ -120,5 +120,4 @@ target_link_libraries(polymarket INTERFACE
 )
 
 target_include_directories(polymarket_clob SYSTEM PRIVATE ${glaze_SOURCE_DIR}/include)
-target_include_directories(polymarket_crypto SYSTEM PRIVATE ${secp256k1_SOURCE_DIR}/include)
 target_include_directories(polymarket_us SYSTEM PRIVATE ${glaze_SOURCE_DIR}/include)
