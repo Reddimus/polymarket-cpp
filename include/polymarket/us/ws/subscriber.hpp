@@ -4,28 +4,9 @@
 /// @brief Minimal libwebsockets-based subscriber for the Polymarket US
 ///        markets channel (wss://api.polymarket.us/v1/ws/markets).
 ///
-/// Phase-1 scope (matches the Phase-1 plan in
-/// `~/.claude/plans/effervescent-strolling-whistle.md`):
-///   - One channel per Subscriber: SUBSCRIPTION_TYPE_MARKET_DATA only
-///   - Single-shard (Polymarket caps subscriptions at 100 markets each;
-///     our USA-only universe is currently ~60 active so one shard fits)
-///   - Ed25519-signed handshake via the same canonical message format
-///     the REST client uses ({timestamp}{method}{path})
-///   - Passive heartbeat handling. The official Polymarket US SDK
-///     listens for heartbeat events but does not send unsolicited
-///     application heartbeat frames.
-///   - Auto-reconnect: caller-driven via a single `connect()` retry on
-///     `disconnect`; no exponential ladder yet (Polymarket docs don't
-///     specify the right backoff and a fixed 5s retry is the kalshi
-///     reference's first-cut value too)
-///
-/// Deferred (intentional, listed so we don't lose track):
-///   - SUBSCRIPTION_TYPE_MARKET_DATA_LITE / TRADE / ORDER channels
-///   - Multi-shard >100 markets
-///   - Sequence-number tracking + gap detection
-///   - Reconnect backoff ladder + jitter
-///   - The private socket (api.polymarket.us/v1/ws/private) — gated on
-///     authed-trade scope which we don't need until Phase-3 trader
+/// One shard supports up to 100 slugs for market-data and trade subscriptions.
+/// Ed25519 authenticates the handshake. Reconnect and resubscribe explicitly.
+/// Private order streams, sequence-gap tracking, and automatic sharding are absent.
 
 #include <atomic>
 #include <chrono>
@@ -52,13 +33,17 @@ struct SubscriberConfig {
 	/// Override host for testing. Defaults to api.polymarket.us. Path is
 	/// fixed at /v1/ws/markets for this MVP.
 	std::string host = "api.polymarket.us";
-	/// Retained for ABI/source compatibility with existing services. The
+	int port = 443;
+	bool use_tls = true; ///< Disable only for a trusted local test server.
+	/// Reserved for source compatibility. The
 	/// subscriber no longer sends unsolicited application heartbeat frames
 	/// because the Polymarket US gateway rejects them as invalid messages.
 	std::chrono::seconds heartbeat = std::chrono::seconds{30};
 };
 
-/// Callback fired for every inbound text frame. Body is the raw
+/// Callback fired for a complete text message. The borrowed view lasts only
+/// through this call. The callback may disconnect or destroy the client.
+/// Exceptions are contained. Body is the raw
 /// JSON string Polymarket sends — caller is responsible for parsing.
 /// Invoked on the libwebsockets service thread, so handlers must be
 /// fast (offload to a queue if non-trivial work is needed).
@@ -113,7 +98,7 @@ public:
 	struct Impl;
 
 private:
-	std::unique_ptr<Impl> impl_;
+	std::shared_ptr<Impl> impl_;
 };
 
 } // namespace polymarket::us::ws

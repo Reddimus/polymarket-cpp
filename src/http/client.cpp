@@ -1,331 +1,315 @@
-/// @file http_client.cpp
-/// @brief HTTP client implementation using libcurl
-
 #include "polymarket/http/client.hpp"
 
-#include <cstring>
+#include <algorithm>
+#include <cctype>
+#include <charconv>
+#include <cmath>
 #include <curl/curl.h>
-#include <sstream>
+#include <limits>
+#include <stdexcept>
 
 namespace polymarket::http {
-
-// =========================================================================
-// QueryBuilder Implementation
-// =========================================================================
-
-QueryBuilder& QueryBuilder::add(std::string_view key, std::string_view value) {
-	params_.emplace_back(std::string(key), std::string(value));
-	return *this;
+namespace {
+struct Runtime {
+	CURLcode status{CURLE_FAILED_INIT};
+	Runtime() {
+		const curl_version_info_data* info = curl_version_info(CURLVERSION_NOW);
+		if (info && (info->features & CURL_VERSION_THREADSAFE))
+			status = curl_global_init(CURL_GLOBAL_DEFAULT);
+	}
+	~Runtime() {
+		if (status == CURLE_OK)
+			curl_global_cleanup();
+	}
+};
+Runtime& runtime() {
+	static Runtime instance;
+	return instance;
 }
 
+bool invalid_text(std::string_view text) {
+	return text.find_first_of(std::string_view{"\r\n\0", 3}) != text.npos;
+}
+bool valid_header(std::string_view name, std::string_view value) {
+	if (name.empty() || invalid_text(value))
+		return false;
+	for (const unsigned char c : name) {
+		if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			  std::string_view{"!#$%&'*+-.^_`|~"}.find(static_cast<char>(c)) !=
+				  std::string_view::npos))
+			return false;
+	}
+	return true;
+}
+std::string lower(std::string text) {
+	for (char& c : text)
+		c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+	return text;
+}
+struct Capture {
+	Response response;
+	std::size_t limit;
+	std::size_t header_bytes{0};
+	bool exceeded{false};
+};
+std::size_t write_body(char* data, std::size_t size, std::size_t count, void* context) noexcept {
+	Capture& out = *static_cast<Capture*>(context);
+	if (size && count > std::numeric_limits<std::size_t>::max() / size)
+		return 0;
+	const std::size_t length = size * count;
+	if (out.limit &&
+		(out.response.body.size() > out.limit || length > out.limit - out.response.body.size())) {
+		out.exceeded = true;
+		return 0;
+	}
+	try {
+		out.response.body.append(data, length);
+		return length;
+	} catch (...) {
+		return 0;
+	}
+}
+std::size_t write_header(char* data, std::size_t size, std::size_t count, void* context) noexcept {
+	Capture& out = *static_cast<Capture*>(context);
+	if (size && count > std::numeric_limits<std::size_t>::max() / size)
+		return 0;
+	const std::size_t length = size * count;
+	if (length > 65536 - out.header_bytes)
+		return 0;
+	out.header_bytes += length;
+	try {
+		std::string_view line(data, length);
+		if (line.starts_with("HTTP/"))
+			out.response.headers.clear();
+		const std::size_t colon = line.find(':');
+		if (colon != line.npos) {
+			std::string_view value = line.substr(colon + 1);
+			const std::size_t first = value.find_first_not_of(" \t");
+			value = first == value.npos ? std::string_view{} : value.substr(first);
+			const std::size_t last = value.find_last_not_of(" \t\r\n");
+			value = last == value.npos ? std::string_view{} : value.substr(0, last + 1);
+			out.response.headers[lower(std::string(line.substr(0, colon)))] = std::string(value);
+		}
+		return length;
+	} catch (...) {
+		return 0;
+	}
+}
+long timeout(std::chrono::milliseconds value) {
+	return static_cast<long>(
+		std::clamp(value.count(), std::chrono::milliseconds::rep{1},
+				   static_cast<std::chrono::milliseconds::rep>(std::numeric_limits<long>::max())));
+}
+} // namespace
+
+QueryBuilder& QueryBuilder::add(std::string_view key, std::string_view value) {
+	params_.emplace_back(key, value);
+	return *this;
+}
 QueryBuilder& QueryBuilder::add(std::string_view key, int64_t value) {
 	return add(key, std::to_string(value));
 }
-
 QueryBuilder& QueryBuilder::add(std::string_view key, double value) {
-	std::ostringstream oss;
-	oss << value;
-	return add(key, oss.str());
+	if (!std::isfinite(value))
+		throw std::invalid_argument("Query numbers must be finite");
+	char buffer[64];
+	const std::to_chars_result result = std::to_chars(buffer, buffer + sizeof(buffer), value);
+	if (result.ec != std::errc{})
+		throw std::invalid_argument("Invalid query number");
+	return add(key, std::string_view(buffer, static_cast<std::size_t>(result.ptr - buffer)));
 }
-
 QueryBuilder& QueryBuilder::add_if(bool condition, std::string_view key, std::string_view value) {
-	if (condition) {
+	if (condition)
 		add(key, value);
-	}
 	return *this;
 }
-
 std::string QueryBuilder::build() const {
-	if (params_.empty()) {
-		return "";
-	}
-
-	std::string result = "?";
-	bool first = true;
+	std::string result;
 	for (const auto& [key, value] : params_) {
-		if (!first) {
-			result += '&';
-		}
-		first = false;
-		result += url_encode(key);
-		result += '=';
-		result += url_encode(value);
+		result += result.empty() ? '?' : '&';
+		result += url_encode(key) + '=' + url_encode(value);
 	}
 	return result;
 }
-
-// =========================================================================
-// URL Encoding
-// =========================================================================
-
 std::string url_encode(std::string_view input) {
-	CURL* curl = curl_easy_init();
-	if (!curl) {
-		// Fallback: return as-is
-		return std::string(input);
-	}
-
-	char* encoded = curl_easy_escape(curl, input.data(), static_cast<int>(input.size()));
+	constexpr char hex[] = "0123456789ABCDEF";
 	std::string result;
-	if (encoded) {
-		result = encoded;
-		curl_free(encoded);
+	for (const unsigned char c : input) {
+		if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			c == '-' || c == '_' || c == '.' || c == '~')
+			result.push_back(static_cast<char>(c));
+		else {
+			result += '%';
+			result += hex[c >> 4];
+			result += hex[c & 15];
+		}
 	}
-	curl_easy_cleanup(curl);
 	return result;
 }
-
 std::string url_decode(std::string_view input) {
-	CURL* curl = curl_easy_init();
-	if (!curl) {
-		return std::string(input);
-	}
-
-	int out_len = 0;
-	char* decoded =
-		curl_easy_unescape(curl, input.data(), static_cast<int>(input.size()), &out_len);
+	const auto nibble = [](unsigned char c) -> int {
+		if (c >= '0' && c <= '9')
+			return c - '0';
+		if (c >= 'a' && c <= 'f')
+			return c - 'a' + 10;
+		if (c >= 'A' && c <= 'F')
+			return c - 'A' + 10;
+		return -1;
+	};
 	std::string result;
-	if (decoded) {
-		result.assign(decoded, out_len);
-		curl_free(decoded);
+	for (std::size_t i = 0; i < input.size(); ++i) {
+		if (input[i] == '%' && input.size() - i >= 3) {
+			const int high = nibble(static_cast<unsigned char>(input[i + 1]));
+			const int low = nibble(static_cast<unsigned char>(input[i + 2]));
+			if (high >= 0 && low >= 0) {
+				result += static_cast<char>((high << 4) | low);
+				i += 2;
+				continue;
+			}
+		}
+		result += input[i];
 	}
-	curl_easy_cleanup(curl);
 	return result;
 }
-
-// =========================================================================
-// Client Implementation
-// =========================================================================
-
 struct Client::Impl {
 	CURL* curl{nullptr};
-	struct curl_slist* headers{nullptr};
-
-	Impl() { curl = curl_easy_init(); }
-
+	Impl() {
+		if (runtime().status == CURLE_OK)
+			curl = curl_easy_init();
+	}
 	~Impl() {
-		if (headers) {
-			curl_slist_free_all(headers);
-		}
-		if (curl) {
+		if (curl)
 			curl_easy_cleanup(curl);
-		}
 	}
 };
-
 void Client::global_init() {
-	curl_global_init(CURL_GLOBAL_DEFAULT);
+	(void)runtime();
 }
-
-void Client::global_cleanup() {
-	curl_global_cleanup();
-}
-
+void Client::global_cleanup() {} // Automatic runtime lifetime; cannot invalidate active clients.
 Client::Client(ClientConfig config) : impl_(std::make_unique<Impl>()), config_(std::move(config)) {}
-
 Client::~Client() = default;
-
 Client::Client(Client&&) noexcept = default;
 Client& Client::operator=(Client&&) noexcept = default;
 
-namespace {
-
-// Write callback for curl
-size_t write_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
-	auto* response = static_cast<std::string*>(userdata);
-	size_t total = size * nmemb;
-	response->append(ptr, total);
-	return total;
-}
-
-// Header callback for curl
-size_t header_callback(char* buffer, size_t size, size_t nitems, void* userdata) {
-	auto* headers = static_cast<std::map<std::string, std::string>*>(userdata);
-	size_t total = size * nitems;
-
-	std::string line(buffer, total);
-	// Trim trailing whitespace
-	while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) {
-		line.pop_back();
-	}
-
-	// Parse header
-	auto colon = line.find(':');
-	if (colon != std::string::npos) {
-		std::string name = line.substr(0, colon);
-		std::string value = line.substr(colon + 1);
-		// Trim leading whitespace from value
-		while (!value.empty() && value.front() == ' ') {
-			value.erase(value.begin());
-		}
-		// Convert header name to lowercase for consistent access
-		for (char& c : name) {
-			c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-		}
-		(*headers)[std::move(name)] = std::move(value);
-	}
-
-	return total;
-}
-
-} // anonymous namespace
-
 Result<Response> Client::execute(const Request& request) {
-	if (!impl_->curl) {
+	if (!impl_ || !impl_->curl)
 		return std::unexpected(Error::network("CURL not initialized"));
+	if (invalid_text(request.url) || invalid_text(config_.user_agent) ||
+		config_.default_timeout.count() <= 0 || config_.connect_timeout.count() <= 0 ||
+		request.timeout.count() < 0 || config_.max_redirects < 0)
+		return std::unexpected(
+			Error::validation("Invalid URL, timeout, user agent, or redirect limit"));
+	if (request.body.size() > static_cast<std::uintmax_t>(std::numeric_limits<curl_off_t>::max()))
+		return std::unexpected(Error::validation("Request body is too large"));
+	std::map<std::string, std::string> merged;
+	for (const auto& [name, value] : default_headers_) {
+		if (!valid_header(name, value))
+			return std::unexpected(Error::validation("Invalid HTTP header"));
+		merged[lower(name)] = value;
 	}
-
+	for (const auto& [name, value] : request.headers) {
+		if (!valid_header(name, value))
+			return std::unexpected(Error::validation("Invalid HTTP header"));
+		merged[lower(name)] = value;
+	}
+	using HeaderList = std::unique_ptr<curl_slist, decltype(&curl_slist_free_all)>;
+	HeaderList headers(nullptr, &curl_slist_free_all);
+	for (const auto& [name, value] : merged) {
+		const std::string text = name + (value.empty() ? ";" : ": " + value);
+		curl_slist* appended = curl_slist_append(headers.get(), text.c_str());
+		if (!appended)
+			return std::unexpected(Error::network("Could not allocate HTTP headers"));
+		(void)headers.release();
+		headers.reset(appended);
+	}
 	CURL* curl = impl_->curl;
 	curl_easy_reset(curl);
-
-	// Set URL
-	curl_easy_setopt(curl, CURLOPT_URL, request.url.c_str());
-
-	// Set method
-	switch (request.method) {
-		case Method::GET:
-			curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
-			break;
-		case Method::POST:
-			curl_easy_setopt(curl, CURLOPT_POST, 1L);
-			break;
-		case Method::PUT:
-			curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
-			break;
-		case Method::DEL:
-			curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELETE");
-			break;
-		case Method::PATCH:
-			curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PATCH");
-			break;
-	}
-
-	// Set body
-	if (!request.body.empty()) {
-		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request.body.c_str());
-		curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(request.body.size()));
-	}
-
-	// Build headers
-	if (impl_->headers) {
-		curl_slist_free_all(impl_->headers);
-		impl_->headers = nullptr;
-	}
-
-	// Add default headers
-	for (const auto& [name, value] : default_headers_) {
-		std::string header = name + ": " + value;
-		impl_->headers = curl_slist_append(impl_->headers, header.c_str());
-	}
-
-	// Add request headers
-	for (const auto& [name, value] : request.headers) {
-		std::string header = name + ": " + value;
-		impl_->headers = curl_slist_append(impl_->headers, header.c_str());
-	}
-
-	if (impl_->headers) {
-		curl_easy_setopt(curl, CURLOPT_HTTPHEADER, impl_->headers);
-	}
-
-	// Set timeouts
-	auto timeout_ms =
-		request.timeout.count() > 0 ? request.timeout.count() : config_.default_timeout.count();
-	curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, static_cast<long>(timeout_ms));
-	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS,
-					 static_cast<long>(config_.connect_timeout.count()));
-
-	// Force IPv4 — Docker bridge networks resolve AAAA records but
-	// route only IPv4. Without this, libcurl tries the IPv6 addresses
-	// first, blocks on connect for the full timeout (or worse, spins
-	// in a tight reconnect loop on certain libcurl/glibc combos),
-	// never reaching the IPv4 fallback. Setting CURL_IPRESOLVE_V4 is
-	// the same fix Docker recommends for in-container HTTPS clients.
-	curl_easy_setopt(curl, CURLOPT_IPRESOLVE, (long)CURL_IPRESOLVE_V4);
-
-	// TCP options
-	if (config_.tcp_nodelay) {
-		curl_easy_setopt(curl, CURLOPT_TCP_NODELAY, 1L);
-	}
-	if (config_.tcp_keepalive) {
-		curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
-		curl_easy_setopt(curl, CURLOPT_TCP_KEEPIDLE,
-						 static_cast<long>(config_.keepalive_interval.count()));
-	}
-
-	// Redirects
-	if (config_.follow_redirects) {
-		curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-		curl_easy_setopt(curl, CURLOPT_MAXREDIRS, static_cast<long>(config_.max_redirects));
-	}
-
-	// Proxy
+	CURLcode option_error = CURLE_OK;
+	const auto set = [&](CURLoption option, const auto& value) {
+		if (option_error == CURLE_OK)
+			option_error = curl_easy_setopt(curl, option, value);
+	};
+	Capture out{.limit = config_.max_response_bytes};
+	set(CURLOPT_URL, request.url.c_str());
+	set(CURLOPT_PROTOCOLS_STR, "http,https");
+	set(CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+	set(CURLOPT_NOSIGNAL, 1L);
+	set(CURLOPT_HTTPHEADER, headers.get());
+	set(CURLOPT_TIMEOUT_MS,
+		timeout(request.timeout.count() ? request.timeout : config_.default_timeout));
+	set(CURLOPT_CONNECTTIMEOUT_MS, timeout(config_.connect_timeout));
+	set(CURLOPT_TCP_NODELAY, config_.tcp_nodelay ? 1L : 0L);
+	set(CURLOPT_TCP_KEEPALIVE, config_.tcp_keepalive ? 1L : 0L);
+	set(CURLOPT_TCP_KEEPIDLE,
+		static_cast<long>(
+			std::clamp(config_.keepalive_interval.count(), std::chrono::seconds::rep{1},
+					   static_cast<std::chrono::seconds::rep>(std::numeric_limits<long>::max()))));
+	// Custom headers can contain credentials; do not forward them through redirects.
+	set(CURLOPT_FOLLOWLOCATION, config_.follow_redirects && merged.empty() ? 1L : 0L);
+	set(CURLOPT_MAXREDIRS, static_cast<long>(config_.max_redirects));
 	if (config_.proxy_url) {
-		curl_easy_setopt(curl, CURLOPT_PROXY, config_.proxy_url->c_str());
-		if (config_.proxy_username && config_.proxy_password) {
-			std::string auth = *config_.proxy_username + ":" + *config_.proxy_password;
-			curl_easy_setopt(curl, CURLOPT_PROXYUSERPWD, auth.c_str());
-		}
+		if (invalid_text(*config_.proxy_url))
+			return std::unexpected(Error::validation("Invalid proxy URL"));
+		set(CURLOPT_PROXY, config_.proxy_url->c_str());
+		if (config_.proxy_username)
+			set(CURLOPT_PROXYUSERNAME, config_.proxy_username->c_str());
+		if (config_.proxy_password)
+			set(CURLOPT_PROXYPASSWORD, config_.proxy_password->c_str());
 	}
-
-	// User agent
-	curl_easy_setopt(curl, CURLOPT_USERAGENT, config_.user_agent.c_str());
-
-	// Response handling
-	Response response;
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response.body);
-	curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_callback);
-	curl_easy_setopt(curl, CURLOPT_HEADERDATA, &response.headers);
-
-	// Execute request
-	auto start = std::chrono::steady_clock::now();
-	CURLcode res = curl_easy_perform(curl);
-	auto end = std::chrono::steady_clock::now();
-
-	// Update stats
-	stats_.request_count++;
+	set(CURLOPT_USERAGENT, config_.user_agent.c_str());
+	set(CURLOPT_ACCEPT_ENCODING, "");
+	set(CURLOPT_WRITEFUNCTION, &write_body);
+	set(CURLOPT_WRITEDATA, &out);
+	set(CURLOPT_HEADERFUNCTION, &write_header);
+	set(CURLOPT_HEADERDATA, &out);
+	if (request.method != Method::GET || !request.body.empty()) {
+		set(CURLOPT_POSTFIELDS, request.body.data());
+		set(CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(request.body.size()));
+	}
+	set(CURLOPT_CUSTOMREQUEST, method_to_string(request.method).data());
+	if (option_error != CURLE_OK)
+		return std::unexpected(Error::network(curl_easy_strerror(option_error)));
+	const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+	const CURLcode result = curl_easy_perform(curl);
+	const std::chrono::nanoseconds elapsed = std::chrono::steady_clock::now() - start;
+	++stats_.request_count;
 	stats_.bytes_sent += request.body.size();
-	stats_.bytes_received += response.body.size();
-	stats_.total_time += std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
-
-	if (res != CURLE_OK) {
-		return std::unexpected(Error::network(curl_easy_strerror(res)));
-	}
-
-	// Get status code
-	long status_code = 0;
-	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status_code);
-	response.status_code = static_cast<int>(status_code);
-
-	return response;
+	stats_.bytes_received += out.response.body.size();
+	stats_.total_time = elapsed > std::chrono::nanoseconds::max() - stats_.total_time
+							? std::chrono::nanoseconds::max()
+							: stats_.total_time + elapsed;
+	if (out.exceeded)
+		return std::unexpected(Error::validation("HTTP response exceeds configured size limit"));
+	if (result == CURLE_OPERATION_TIMEDOUT)
+		return std::unexpected(Error::timeout(curl_easy_strerror(result)));
+	if (result != CURLE_OK)
+		return std::unexpected(Error::network(curl_easy_strerror(result)));
+	long status = 0;
+	if (curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status) != CURLE_OK)
+		return std::unexpected(Error::network("Cannot read HTTP status"));
+	out.response.status_code = static_cast<int>(status);
+	return std::move(out.response);
 }
-
 Result<Response> Client::get(std::string_view url) {
-	Request req;
-	req.method = Method::GET;
-	req.url = std::string(url);
-	return execute(req);
+	Request request;
+	request.url = url;
+	return execute(request);
 }
-
 Result<Response> Client::post(std::string_view url, std::string_view body) {
-	Request req;
-	req.method = Method::POST;
-	req.url = std::string(url);
-	req.body = std::string(body);
-	req.json_content();
-	return execute(req);
+	Request request;
+	request.method = Method::POST;
+	request.url = url;
+	request.body = body;
+	request.json_content();
+	return execute(request);
 }
-
 Result<Response> Client::del(std::string_view url) {
-	Request req;
-	req.method = Method::DEL;
-	req.url = std::string(url);
-	return execute(req);
+	Request request;
+	request.method = Method::DEL;
+	request.url = url;
+	return execute(request);
 }
-
 void Client::set_default_header(std::string_view name, std::string_view value) {
-	default_headers_[std::string(name)] = std::string(value);
+	default_headers_[std::string(name)] = value;
 }
-
 } // namespace polymarket::http

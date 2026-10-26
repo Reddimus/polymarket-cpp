@@ -5,7 +5,7 @@
 ///
 /// Provides subscription-based streaming for:
 /// - Market channel: orderbook updates, price changes, trades
-/// - User channel: order fills, cancellations (authenticated)
+/// - User channel: order/trade events as UserEvent JSON (authenticated)
 
 #include <atomic>
 #include <chrono>
@@ -34,7 +34,7 @@ struct BookSnapshot {
 	std::string hash;
 };
 
-/// Orderbook delta (incremental update)
+/// Legacy single-level wrapper; current price_change arrays use MarketEvent.
 struct BookDelta {
 	uint256_t asset_id;
 	Decimal price;
@@ -43,7 +43,7 @@ struct BookDelta {
 	Timestamp timestamp;
 };
 
-/// Price change message
+/// Legacy single-price wrapper; current price_change arrays use MarketEvent.
 struct PriceChange {
 	uint256_t asset_id;
 	Decimal price;
@@ -65,7 +65,7 @@ struct TickSizeChange {
 	Timestamp timestamp;
 };
 
-/// Best bid/ask message (custom features)
+/// Legacy best-bid/ask wrapper; current events use MarketEvent.
 struct BestBidAsk {
 	uint256_t asset_id;
 	std::optional<Decimal> best_bid;
@@ -73,14 +73,14 @@ struct BestBidAsk {
 	Timestamp timestamp;
 };
 
-/// New market message (custom features)
+/// Legacy new-market wrapper; current events use MarketEvent.
 struct NewMarket {
 	std::vector<uint256_t> asset_ids;
 	std::string condition_id;
 	Timestamp timestamp;
 };
 
-/// Market resolved message (custom features)
+/// Legacy resolution wrapper; current events use MarketEvent.
 struct MarketResolved {
 	std::vector<uint256_t> asset_ids;
 	std::string condition_id;
@@ -88,7 +88,7 @@ struct MarketResolved {
 	Timestamp timestamp;
 };
 
-/// Order fill message (user channel)
+/// Legacy fill wrapper; current order/trade events use UserEvent.
 struct OrderFill {
 	std::string order_id;
 	uint256_t asset_id;
@@ -100,7 +100,7 @@ struct OrderFill {
 	std::optional<std::string> transaction_hash;
 };
 
-/// Order cancel message (user channel)
+/// Legacy cancellation wrapper; current order events use UserEvent.
 struct OrderCancel {
 	std::string order_id;
 	uint256_t asset_id;
@@ -108,7 +108,7 @@ struct OrderCancel {
 	Timestamp timestamp;
 };
 
-/// Trade confirmation message (user channel)
+/// Legacy confirmation wrapper; current trade events use UserEvent.
 struct TradeConfirm {
 	std::string trade_id;
 	std::string order_id;
@@ -119,10 +119,22 @@ struct TradeConfirm {
 	Timestamp timestamp;
 };
 
-/// Union of all WebSocket message types
-using WsMessage =
-	std::variant<BookSnapshot, BookDelta, PriceChange, LastTradePriceMessage, TickSizeChange,
-				 BestBidAsk, NewMarket, MarketResolved, OrderFill, OrderCancel, TradeConfirm>;
+/// Market events without a typed decoder, including price_change arrays.
+struct MarketEvent {
+	std::string event_type;
+	std::string json;
+};
+
+/// Current user order/trade event; preserves all service fields as JSON.
+struct UserEvent {
+	std::string event_type;
+	std::string json;
+};
+
+/// Union of selected typed market messages and raw user events
+using WsMessage = std::variant<BookSnapshot, BookDelta, PriceChange, LastTradePriceMessage,
+							   TickSizeChange, BestBidAsk, NewMarket, MarketResolved, OrderFill,
+							   OrderCancel, TradeConfirm, UserEvent, MarketEvent>;
 
 /// WebSocket error
 struct WsError {
@@ -149,12 +161,13 @@ using WsStateCallback = std::function<void(bool connected)>;
 
 /// WebSocket client configuration
 struct WsConfig {
-	std::string url{"wss://ws-subscriptions-clob.polymarket.com/ws/"};
+	std::string url{"wss://ws-subscriptions-clob.polymarket.com/ws/market"};
+	// Reserved compatibility settings; reconnect explicitly with connect().
 	std::chrono::seconds reconnect_delay{5};
 	std::uint16_t max_reconnect_attempts{10};
-	bool auto_reconnect{true};
-	std::chrono::seconds ping_interval{30};
-	bool enable_custom_features{false}; // Enables best_bid_ask, new_market, market_resolved
+	bool auto_reconnect{false};
+	std::chrono::seconds ping_interval{10}; ///< Clamped to 1..10 seconds on connect.
+	bool enable_custom_features{false};		// Enables best_bid_ask, new_market, market_resolved
 };
 
 /// Subscription ID for tracking active subscriptions
@@ -176,14 +189,16 @@ enum class ChannelType {
 
 /// WebSocket streaming client for real-time CLOB data
 ///
-/// Supports both market (public) and user (authenticated) channels
-/// with automatic reconnection and subscription management.
+/// One /ws/market or /ws/user connection per client; use two clients for both.
+/// Reconnect explicitly and register subscriptions again after a close.
+/// Callbacks run on the service thread and may disconnect or destroy the client.
+/// Their exceptions are contained; externally serialize other client operations.
 class WebSocketClient {
 public:
 	/// Create a WebSocket client for public market data
 	explicit WebSocketClient(WsConfig config = {});
 
-	/// Create a WebSocket client with authentication for user channel
+	/// With credentials; the default URL becomes /ws/user. A custom URL selects the channel.
 	WebSocketClient(WsConfig config, Credentials credentials);
 
 	~WebSocketClient();
@@ -213,7 +228,7 @@ public:
 
 	/// Subscribe to market data for specific assets
 	/// @param asset_ids Token IDs to subscribe to
-	/// @return Subscription ID for later unsubscription
+	/// @return Registration ID; unsubscribe by asset IDs.
 	[[nodiscard]] Result<SubscriptionId> subscribe_market(const std::vector<uint256_t>& asset_ids);
 
 	/// Subscribe to market data with custom features enabled
@@ -267,7 +282,7 @@ public:
 	struct Impl;
 
 private:
-	std::unique_ptr<Impl> impl_;
+	std::shared_ptr<Impl> impl_;
 };
 
 } // namespace polymarket::clob

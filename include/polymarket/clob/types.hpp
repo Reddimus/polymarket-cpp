@@ -212,7 +212,8 @@ struct SpreadResponse {
 struct LastTradePriceResponse {
 	Decimal price;
 	uint256_t token_id;
-	Timestamp timestamp;
+	Timestamp timestamp{0}; ///< Legacy extension; zero when absent from the service.
+	std::string side;		///< BUY, SELL, or empty when no trades exist.
 };
 
 /// Orderbook level

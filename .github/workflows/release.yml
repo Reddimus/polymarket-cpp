@@ -46,11 +46,7 @@ jobs:
         run: |
           tag="${GITHUB_REF#refs/tags/}"
           version="${tag#v}"
-          # Pipe directly to a file. DO NOT capture into a shell var
-          # and echo it back — bash treats backticks as command
-          # substitution, which silently strips every inline `code`
-          # span from the body. Reading via `gh release create
-          # --notes-file` preserves the bytes verbatim.
+          # Preserve changelog bytes, including backticks and newlines.
           awk -v v="$version" '
             $0 ~ "^## \\["v"\\]" { capture=1; next }
             capture && /^## / { exit }

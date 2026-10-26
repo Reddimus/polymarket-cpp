@@ -1,32 +1,29 @@
 # Polymarket C++ SDK - Root Makefile
 # Wraps CMake for convenient day-to-day workflow
 
-BUILD_DIR := build
+BUILD_DIR ?= build
+CMAKE_ARGS ?=
 CMAKE := cmake
 NPROC := $(shell nproc 2>/dev/null || echo 4)
 
-.PHONY: all build test lint clean configure help format pre-commit install-hooks debug release
+.PHONY: all build test lint clean configure help format pre-commit install-hooks debug release consumers configure-debug
 
 # Default target
 all: build
 
 # Configure CMake (Release by default)
 configure:
-	@mkdir -p $(BUILD_DIR)
-	@cd $(BUILD_DIR) && $(CMAKE) .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-
-# Configure for Debug
+	@$(CMAKE) -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON $(CMAKE_ARGS)
 configure-debug:
-	@mkdir -p $(BUILD_DIR)
-	@cd $(BUILD_DIR) && $(CMAKE) .. -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+	@$(CMAKE) -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON $(CMAKE_ARGS)
 
 # Build all targets
 build: configure
 	@$(CMAKE) --build $(BUILD_DIR) -j$(NPROC)
 
-# Debug build
-debug: configure-debug
-	@$(CMAKE) --build $(BUILD_DIR) -j$(NPROC)
+# Debug uses a separate directory.
+debug:
+	$(MAKE) build BUILD_DIR=build-debug CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Debug $(CMAKE_ARGS)"
 
 # Release build (explicit)
 release: configure
@@ -36,46 +33,33 @@ release: configure
 test: build
 	@cd $(BUILD_DIR) && ctest --output-on-failure
 
-# Run linting (clang-format check)
+SOURCES := $(shell find src include tests examples apps -type f \( -name '*.cpp' -o -name '*.hpp' \))
 lint:
-	@if command -v clang-format >/dev/null 2>&1; then \
-		echo "Checking code formatting..."; \
-		find src include tests examples -name '*.cpp' -o -name '*.hpp' 2>/dev/null | xargs clang-format --dry-run --Werror 2>/dev/null || \
-		echo "Format check complete (some files may need formatting)"; \
-	else \
-		echo "clang-format not found - skipping lint"; \
-	fi
-
-# Format code in place
+	clang-format --dry-run --Werror $(SOURCES)
 format:
-	@if command -v clang-format >/dev/null 2>&1; then \
-		echo "Formatting code..."; \
-		find src include tests examples -name '*.cpp' -o -name '*.hpp' 2>/dev/null | xargs clang-format -i 2>/dev/null; \
-		echo "Done"; \
-	else \
-		echo "clang-format not found"; \
-	fi
+	clang-format -i $(SOURCES)
 
 # pre-commit: auto-format, then lint. Run before every commit to avoid
 # the recurring "push -> CI clang-format fail -> follow-up fix PR" loop.
 # Idempotent — `format` re-running is a no-op.
 pre-commit: format lint
 
-# install-hooks: drop a .git/hooks/pre-commit shim that runs `make pre-commit`
-# on every `git commit`. One-shot operator setup; idempotent.
+# Install a non-mutating hook without replacing unrelated hooks.
 install-hooks:
-	@mkdir -p .git/hooks
-	@if [ -f .git/hooks/pre-commit ] && grep -q 'make pre-commit' .git/hooks/pre-commit 2>/dev/null; then \
-		echo "pre-commit hook already installed"; \
-	else \
-		printf '#!/bin/sh\nexec make pre-commit\n' > .git/hooks/pre-commit; \
-		chmod +x .git/hooks/pre-commit; \
-		echo "Installed .git/hooks/pre-commit -> make pre-commit"; \
-	fi
+	@hook="$$(git rev-parse --git-path hooks)/pre-commit"; \
+	if [ -f "$$hook" ]; then \
+        case "$$(cat "$$hook")" in \
+            "$$(printf '#!/bin/sh\nexec make lint')"|"$$(printf '#!/bin/sh\nexec make pre-commit')") ;; \
+            *) echo "$$hook already exists; not replacing it"; exit 1 ;; \
+        esac; \
+    fi; \
+	mkdir -p "$$(dirname "$$hook")" && printf '#!/bin/sh\nexec make lint\n' > "$$hook" && \
+	chmod +x "$$hook" && echo "Installed $$hook (runs make lint)"
+
 
 # Clean build artifacts
 clean:
-	@rm -rf $(BUILD_DIR)
+	@rm -rf $(BUILD_DIR) build-debug
 	@echo "Cleaned build directory"
 
 # Load .env and run example
@@ -87,12 +71,7 @@ define run_example
 	fi
 endef
 
-# Run examples — keep this list aligned with examples/CMakeLists.txt.
-# A WebSocket example isn't bundled yet even though src/clob/websocket.cpp
-# is a functional libwebsockets impl (704 LoC, market + user channels):
-# wiring an interactive run-target needs a credentials path that doesn't
-# trip the lint suite. Add ``run-websocket`` when an example/websocket.cpp
-# lands. Tests at tests/unit cover the lifecycle/validation contract.
+# Example targets match examples/CMakeLists.txt.
 run-market_data: build
 	$(call run_example,./$(BUILD_DIR)/examples/example_market_data)
 
@@ -120,3 +99,6 @@ help:
 	@echo "  make run-market_data      - Run market data example"
 	@echo "  make run-order_placement  - Run order placement example"
 	@echo "  make run-us_smoke         - Smoke-test the US client (auth + 5 endpoints)"
+
+consumers:
+	bash tools/test_consumers.sh $(CMAKE_ARGS)
