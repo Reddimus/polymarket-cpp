@@ -15,6 +15,8 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   preserve negative fractional signs. Invalid values and overflow now throw.
 - Join/retire WebSocket workers safely across moves, callback destruction,
   and reconnects; assemble bounded messages and preserve TLS runtime state.
+- Release replaced callbacks outside their mutex and preserve native POST
+  redirect behavior.
 - Bound HTTP responses and callbacks, validate headers, restrict protocols,
   inherit configured timeouts, and protect credentials across redirects.
 - Encode US query values, validate complete JSON and integer conversions,
@@ -25,6 +27,7 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   indicator, and GTD expiration); escape bodies and reject unsupported IDs.
 - Separate CLOB market/user sockets, match authenticated subscription JSON,
   retain raw user events/trade sides, and reject unknown WebSocket tick sizes.
+- Remove the core/crypto static-link cycle through a shared hash module.
 - Correct installed dependencies, private include paths, version reporting,
   incremental/Debug builds, strict lint, hooks, and concise documentation.
 

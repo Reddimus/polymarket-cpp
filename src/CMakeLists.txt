@@ -1,3 +1,11 @@
+# Shared hash primitive keeps core address formatting independent of crypto wrappers.
+add_library(polymarket_hash STATIC crypto/keccak.cpp)
+target_compile_features(polymarket_hash PUBLIC cxx_std_23)
+target_include_directories(polymarket_hash PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
+
 # Core library
 add_library(polymarket_core STATIC
     core/error.cpp
@@ -5,6 +13,7 @@ add_library(polymarket_core STATIC
     core/rate_limit.cpp
 )
 target_compile_features(polymarket_core PUBLIC cxx_std_23)
+target_link_libraries(polymarket_core PUBLIC polymarket_hash)
 target_include_directories(polymarket_core PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
@@ -25,7 +34,6 @@ target_include_directories(polymarket_http PUBLIC
 
 # Crypto library
 add_library(polymarket_crypto STATIC
-    crypto/keccak.cpp
     crypto/secp256k1.cpp
     crypto/eip712.cpp
     crypto/hmac.cpp

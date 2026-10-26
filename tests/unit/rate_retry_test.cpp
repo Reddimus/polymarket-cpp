@@ -4,6 +4,7 @@
 #include <thread>
 #include <vector>
 
+#include "../../src/detail/callback_slot.hpp"
 #include "polymarket/core/rate_limit.hpp"
 #include "polymarket/core/retry.hpp"
 
@@ -39,4 +40,25 @@ TEST_CASE("Retry delay stays finite and capped", "[retry]") {
 	policy.backoff_multiplier = std::numeric_limits<double>::infinity();
 	REQUIRE(polymarket::calculate_retry_delay(255, policy) <= policy.max_delay);
 	REQUIRE(polymarket::should_retry(polymarket::Error::timeout("fixture"), policy));
+}
+
+TEST_CASE("Callback replacement releases captured state outside lock", "[callback]") {
+	polymarket::detail::CallbackSlot<void()> slot;
+	bool released = false;
+	struct Reenter {
+		polymarket::detail::CallbackSlot<void()>* slot;
+		bool* released;
+		~Reenter() {
+			slot->set({});
+			*released = true;
+		}
+	};
+	auto capture = std::make_shared<Reenter>();
+	capture->slot = &slot;
+	capture->released = &released;
+	slot.set([capture] {});
+	capture.reset();
+	slot.set({});
+	REQUIRE(released);
+	slot.invoke();
 }

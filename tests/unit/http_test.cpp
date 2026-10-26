@@ -272,6 +272,22 @@ TEST_CASE("HTTP custom headers suppress credential forwarding redirects", "[http
 	REQUIRE(result->status_code == 302);
 	REQUIRE(server.count() == 1);
 }
+TEST_CASE("HTTP POST redirects follow native verb and body rules", "[http][redirect]") {
+	for (const int status : {301, 302, 303, 307, 308}) {
+		LoopbackServer destination(http_response(200, "ok"));
+		LoopbackServer redirect(
+			http_response(status, "", "Location: " + destination.base_url() + "\r\n"));
+		polymarket::http::Client client;
+		polymarket::http::Request request;
+		request.method = polymarket::http::Method::POST;
+		request.url = redirect.base_url();
+		request.body = "payload";
+		REQUIRE(client.execute(request));
+		const bool preserve = status == 307 || status == 308;
+		REQUIRE(destination.last().method == (preserve ? "POST" : "GET"));
+		REQUIRE(destination.last().body == (preserve ? "payload" : ""));
+	}
+}
 TEST_CASE("HTTP uses configured timeout", "[http]") {
 	LoopbackServer server("");
 	polymarket::http::Client client({.default_timeout = 50ms});

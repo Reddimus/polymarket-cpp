@@ -107,6 +107,7 @@ endif()
 set(POLYMARKET_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/polymarket")
 
 install(TARGETS
+    polymarket_hash
     polymarket_core
     polymarket_http
     polymarket_crypto

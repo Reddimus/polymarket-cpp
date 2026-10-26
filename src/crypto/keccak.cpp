@@ -1,7 +1,6 @@
 /// @file keccak.cpp
 /// @brief Keccak-256 implementation (Ethereum variant)
 ///
-/// Uses OpenSSL's EVP interface for the hash computation.
 /// IMPORTANT: Ethereum uses original Keccak (0x01 padding), not SHA-3 (0x06
 /// padding).
 
@@ -12,8 +11,6 @@
 #include <bit>
 #include <cstring>
 #include <iomanip>
-#include <openssl/err.h>
-#include <openssl/evp.h>
 #include <sstream>
 
 namespace polymarket::crypto {
@@ -92,7 +89,7 @@ Keccak256Hash keccak256(std::span<const std::uint8_t> data) {
 
 	// Absorb phase
 	size_t offset = 0;
-	while (offset + KECCAK_RATE <= data.size()) {
+	while (data.size() - offset >= KECCAK_RATE) {
 		for (int i = 0; i < KECCAK_RATE / 8; ++i) {
 			std::uint64_t lane = 0;
 			for (int j = 0; j < 8; ++j) {
@@ -107,7 +104,8 @@ Keccak256Hash keccak256(std::span<const std::uint8_t> data) {
 	// Absorb remaining bytes with padding
 	std::array<std::uint8_t, KECCAK_RATE> padded = {0};
 	size_t remaining = data.size() - offset;
-	std::memcpy(padded.data(), data.data() + offset, remaining);
+	if (remaining != 0)
+		std::memcpy(padded.data(), data.data() + offset, remaining);
 
 	// Keccak padding: 0x01 at end of message, 0x80 at end of block
 	// IMPORTANT: Ethereum uses 0x01, NOT SHA-3's 0x06

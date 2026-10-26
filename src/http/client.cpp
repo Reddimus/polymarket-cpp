@@ -262,11 +262,14 @@ Result<Response> Client::execute(const Request& request) {
 	set(CURLOPT_WRITEDATA, &out);
 	set(CURLOPT_HEADERFUNCTION, &write_header);
 	set(CURLOPT_HEADERDATA, &out);
+	if (request.method == Method::POST)
+		set(CURLOPT_POST, 1L);
+	else if (request.method != Method::GET || !request.body.empty())
+		set(CURLOPT_CUSTOMREQUEST, method_to_string(request.method).data());
 	if (request.method != Method::GET || !request.body.empty()) {
 		set(CURLOPT_POSTFIELDS, request.body.data());
 		set(CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(request.body.size()));
 	}
-	set(CURLOPT_CUSTOMREQUEST, method_to_string(request.method).data());
 	if (option_error != CURLE_OK)
 		return std::unexpected(Error::network(curl_easy_strerror(option_error)));
 	const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();

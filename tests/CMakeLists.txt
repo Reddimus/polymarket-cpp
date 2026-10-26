@@ -57,7 +57,7 @@ endif()
 # Register tests with CTest
 include(CTest)
 include(Catch)
-catch_discover_tests(polymarket_tests)
+catch_discover_tests(polymarket_tests PROPERTIES TIMEOUT 30)
 
 # Semantic benchmark; timing is enforced only for optimized, unsanitized builds.
 add_executable(polymarket_parse_benchmark parse_benchmark.cpp)

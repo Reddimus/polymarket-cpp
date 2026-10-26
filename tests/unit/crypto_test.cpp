@@ -226,3 +226,9 @@ TEST_CASE("Base64 encoding", "[crypto][base64]") {
 		REQUIRE(*decoded == original);
 	}
 }
+
+TEST_CASE("Keccak accepts a default empty span", "[crypto][keccak]") {
+	const std::span<const std::uint8_t> empty;
+	REQUIRE(polymarket::crypto::hash_to_hex(polymarket::crypto::keccak256(empty)) ==
+			"0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470");
+}
